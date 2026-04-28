@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { BOOKMARK_TAXONOMY } from '../lib/bookmarkTaxonomy'
 import { createTranslator } from '../lib/i18n'
@@ -86,13 +86,11 @@ export default function SidePanelApp() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('newest')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [reprocessingIds, setReprocessingIds] = useState<Set<string>>(() => new Set())
   const [loading, setLoading] = useState(true)
   const [now] = useState(() => Date.now())
   const { t } = createTranslator(settings?.language)
-  const aiConfigured = Boolean(
-    settings?.aiServiceMode === 'hosted' ||
-    Object.values(settings?.apiKeys ?? {}).some(key => Boolean(key?.trim())),
-  )
+  const aiConfigured = Boolean(settings?.aiEnabled)
   const aiNeedsSetup = Boolean(settings?.aiEnabled && !aiConfigured)
   const statusLabels: Record<FilterStatus, string> = {
     all: t('all'),
@@ -118,6 +116,13 @@ export default function SidePanelApp() {
     const handler = (msg: { type: string; payload: Bookmark }) => {
       if (msg.type === 'BOOKMARK_UPDATED') {
         setBookmarks(prev => prev.map(b => b.id === msg.payload.id ? msg.payload : b))
+        if (msg.payload.aiStatus !== 'pending') {
+          setReprocessingIds(prev => {
+            const next = new Set(prev)
+            next.delete(msg.payload.id)
+            return next
+          })
+        }
       }
     }
     chrome.runtime.onMessage.addListener(handler)
@@ -270,9 +275,33 @@ export default function SidePanelApp() {
 
   const handleReprocess = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    const res = await chrome.runtime.sendMessage({ type: 'REPROCESS_BOOKMARK', payload: id })
-    if (res.success) {
-      setBookmarks(prev => prev.map(bookmark => bookmark.id === id ? res.data : bookmark))
+    setReprocessingIds(prev => new Set(prev).add(id))
+    setBookmarks(prev => prev.map(bookmark => bookmark.id === id
+      ? { ...bookmark, aiStatus: 'pending', aiError: undefined, updatedAt: Date.now() }
+      : bookmark,
+    ))
+
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'REPROCESS_BOOKMARK', payload: id })
+      if (res.success) {
+        setBookmarks(prev => prev.map(bookmark => bookmark.id === id ? res.data : bookmark))
+      } else {
+        setBookmarks(prev => prev.map(bookmark => bookmark.id === id
+          ? { ...bookmark, aiStatus: 'failed', aiError: res.error ?? 'AI analysis failed' }
+          : bookmark,
+        ))
+      }
+    } catch (err) {
+      setBookmarks(prev => prev.map(bookmark => bookmark.id === id
+        ? { ...bookmark, aiStatus: 'failed', aiError: err instanceof Error ? err.message : 'AI analysis failed' }
+        : bookmark,
+      ))
+    } finally {
+      setReprocessingIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }, [])
 
@@ -512,6 +541,7 @@ export default function SidePanelApp() {
                 onDelete={handleDelete}
                 onUpdate={handleUpdateBookmark}
                 onReprocess={handleReprocess}
+                isReprocessing={reprocessingIds.has(bm.id)}
                 timeAgo={timeAgo}
                 t={t}
                 searchQuery={searchQuery}
@@ -525,6 +555,51 @@ export default function SidePanelApp() {
 }
 
 /** 在文本中高亮搜索词 */
+function AIStatusNote({
+  bookmark,
+  isAnalyzing,
+  t,
+}: {
+  bookmark: Bookmark
+  isAnalyzing: boolean
+  t: ReturnType<typeof createTranslator>['t']
+}) {
+  if (isAnalyzing) {
+    return (
+      <div className="ai-status-note running">
+        <div className="spinner mini-spinner" />
+        <span>{t('analyzing')}</span>
+      </div>
+    )
+  }
+
+  if (bookmark.aiStatus === 'failed') {
+    return (
+      <div className="ai-status-note failed">
+        {bookmark.aiError ? `${t('aiFailed')}: ${bookmark.aiError}` : t('aiFailed')}
+      </div>
+    )
+  }
+
+  if (bookmark.aiStatus === 'skipped') {
+    return (
+      <div className="ai-status-note warning">
+        {bookmark.aiError ? `${t('aiSkipped')}: ${bookmark.aiError}` : t('aiSkipped')}
+      </div>
+    )
+  }
+
+  if (bookmark.aiStatus === 'done' && bookmark.aiError) {
+    return (
+      <div className="ai-status-note warning">
+        {`${t('aiDoneNoSummary')}: ${bookmark.aiError}`}
+      </div>
+    )
+  }
+
+  return null
+}
+
 function highlightText(text: string, query?: string): React.ReactNode {
   if (!query?.trim()) return text
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -547,6 +622,7 @@ function BookmarkCard({
   onDelete,
   onUpdate,
   onReprocess,
+  isReprocessing,
   timeAgo,
   t,
   searchQuery,
@@ -560,6 +636,7 @@ function BookmarkCard({
   onDelete: (id: string, e: React.MouseEvent) => void
   onUpdate: (id: string, patch: Partial<Bookmark>) => void
   onReprocess: (id: string, e: React.MouseEvent) => void
+  isReprocessing: boolean
   timeAgo: (ts?: number) => string
   t: ReturnType<typeof createTranslator>['t']
   searchQuery?: string
@@ -571,6 +648,8 @@ function BookmarkCard({
   const [draftNote, setDraftNote] = useState(bm.note ?? '')
   const rootOptions = getRootCategories(categories)
   const subCategoryOptions = getFolderChildren(categories, draftCategory)
+  const isAnalyzing = isReprocessing || bm.aiStatus === 'pending'
+  const showAIStatus = isAnalyzing || bm.aiStatus === 'skipped' || bm.aiStatus === 'failed' || (bm.aiStatus === 'done' && Boolean(bm.aiError))
 
   function saveEdit(e: React.MouseEvent) {
     e.stopPropagation()
@@ -589,7 +668,7 @@ function BookmarkCard({
   }
 
   return (
-    <article className={`bookmark-card ${editing ? 'editing' : ''}`} onClick={() => !editing && onOpen(bm.url)}>
+    <article className={`bookmark-card ${editing ? 'editing' : ''} ${isAnalyzing ? 'ai-running' : ''}`} onClick={() => !editing && onOpen(bm.url)}>
       <div className="bm-header">
         {bm.favicon
           ? <img src={bm.favicon} className="bm-favicon" alt="" onError={e => (e.currentTarget.style.display = 'none')} />
@@ -611,8 +690,13 @@ function BookmarkCard({
           >
             {editing ? t('saveChanges') : t('edit')}
           </button>
-          <button className="bm-action-btn" title={t('reanalyze')} onClick={e => onReprocess(bm.id, e)}>
-            AI
+          <button
+            className={`bm-action-btn ai-btn ${isAnalyzing ? 'running' : ''}`}
+            title={t('reanalyze')}
+            disabled={isAnalyzing}
+            onClick={e => onReprocess(bm.id, e)}
+          >
+            {isAnalyzing ? <><div className="spinner mini-spinner" /> AI</> : 'AI'}
           </button>
           <button className="bm-action-btn" title={t('archive')} onClick={e => onArchive(bm.id, e)}>
             {t('archive')}
@@ -623,23 +707,17 @@ function BookmarkCard({
         </div>
       </div>
 
+      {showAIStatus && (
+        <AIStatusNote bookmark={bm} isAnalyzing={isAnalyzing} t={t} />
+      )}
+
       {bm.summary ? (
         <div className="bm-summary">{highlightText(bm.summary, searchQuery)}</div>
-      ) : bm.aiStatus === 'pending' ? (
+      ) : isAnalyzing ? (
         <div className="bm-ai-pending">
           <div className="bm-summary-skeleton skeleton" />
           <div className="bm-summary-skeleton skeleton short" />
-          <div className="ai-processing">
-            <div className="spinner mini-spinner" />
-            {t('analyzing')}
-          </div>
         </div>
-      ) : bm.aiStatus === 'skipped' ? (
-        <div className="ai-status-note">{bm.aiError ? `${t('aiSkipped')}：${bm.aiError}` : t('aiSkipped')}</div>
-      ) : bm.aiStatus === 'failed' ? (
-        <div className="ai-status-note failed">{bm.aiError ? `${t('aiFailed')}：${bm.aiError}` : t('aiFailed')}</div>
-      ) : bm.aiStatus === 'done' ? (
-        <div className="ai-status-note">{bm.aiError ? `${t('aiDoneNoSummary')}：${bm.aiError}` : t('aiDoneNoSummary')}</div>
       ) : null}
 
       {editing && (

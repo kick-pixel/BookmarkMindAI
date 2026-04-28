@@ -1,9 +1,10 @@
 // ============================================================
-// BookmarksAI · Chrome Storage 存储层
+// BookmarkMind AI · Chrome Storage 存储层
 // ============================================================
 import type { Bookmark, Category, UserSettings } from '../types'
 import { BOOKMARK_TAXONOMY, getAllFolderPaths } from './bookmarkTaxonomy'
 import { IMPORT_STAGING_FOLDER } from './bookmarkImport'
+import { isUsingBuiltInFreeAI } from './aiConfig'
 
 const KEYS = {
   BOOKMARKS: 'bai_bookmarks',
@@ -11,12 +12,19 @@ const KEYS = {
   SETTINGS: 'bai_settings',
 } as const
 
+const CORE_AI_AUTOMATION_SETTINGS = {
+  autoClassify: true,
+  autoTag: true,
+  autoSummary: true,
+  autoExtractKeywords: true,
+} as const
+
 // ── 默认配置 ────────────────────────────────────────────────
 export const DEFAULT_SETTINGS: UserSettings = {
-  aiProvider: 'deepseek',
+  aiProvider: 'nvidia',
   apiKeys: {},
   aiEnabled: true,
-  aiServiceMode: 'byok',
+  aiServiceMode: 'hosted',
   autoClassify: true,
   autoTag: true,
   autoSummary: true,
@@ -342,16 +350,27 @@ function ensureCategoryEntries(categories: Category[], folderPath: string[]): vo
 // ── 设置 ────────────────────────────────────────────────────
 export async function getSettings(): Promise<UserSettings> {
   const result = await chrome.storage.local.get(KEYS.SETTINGS)
-  return {
+  const settings = {
     ...DEFAULT_SETTINGS,
     ...((result[KEYS.SETTINGS] as Partial<UserSettings> | undefined) ?? {}),
     aiEnabled: true,
+    ...CORE_AI_AUTOMATION_SETTINGS,
+  }
+  const hasAnyApiKey = Object.values(settings.apiKeys ?? {}).some(key => Boolean(key?.trim()))
+  return {
+    ...settings,
+    aiServiceMode: settings.aiServiceMode === 'byok' && !hasAnyApiKey ? 'hosted' : settings.aiServiceMode,
   }
 }
 
 export async function updateSettings(partial: Partial<UserSettings>): Promise<UserSettings> {
   const settings = await getSettings()
-  const updated = { ...settings, ...partial }
+  const updated = {
+    ...settings,
+    ...partial,
+    aiEnabled: true,
+    ...CORE_AI_AUTOMATION_SETTINGS,
+  }
   await chrome.storage.local.set({ [KEYS.SETTINGS]: updated })
   return updated
 }
@@ -385,7 +404,12 @@ export async function canUseAI(): Promise<{ allowed: boolean; remaining: number;
 
 export async function incrementAIUsage(): Promise<void> {
   const settings = await getSettings()
+  if (!isUsingBuiltInFreeAI(settings)) return
   await updateSettings({ aiUsageCount: settings.aiUsageCount + 1 })
+}
+
+export async function resetFreeAIUsage(): Promise<UserSettings> {
+  return updateSettings({ aiUsageCount: 0, aiUsageResetAt: Date.now() })
 }
 
 // ── 初始化 ────────────────────────────────────────────────────

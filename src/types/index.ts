@@ -1,11 +1,12 @@
-// ============================================================
-// BookmarksAI · 核心类型定义
+﻿// ============================================================
+// BookmarkMind AI · 核心类型定义
 // ============================================================
 
 export type AIProvider =
   | 'deepseek'
   | 'kimi'
   | 'openai'
+  | 'nvidia'
   | 'openrouter'
   | 'siliconflow'
   | 'dashscope'
@@ -126,6 +127,7 @@ export type MessageType =
   | 'GET_SETTINGS'
   | 'UPDATE_SETTINGS'
   | 'GET_USAGE'
+  | 'RESET_FREE_AI_USAGE'
   | 'RECORD_VISIT'
   | 'GET_CATEGORIES'
   | 'CREATE_CATEGORY'

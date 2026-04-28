@@ -1,5 +1,5 @@
-// ============================================================
-// BookmarksAI · AI Prompt 构建器
+﻿// ============================================================
+// BookmarkMind AI · AI Prompt 构建器
 // 为 classifyBookmark 提供增强的 System Prompt，
 // 注入域名引擎匹配结果、URL 结构分析、用户学习记录
 // ============================================================
@@ -27,7 +27,7 @@ export function buildClassifySystemPrompt(url: string): string {
     ? `\n📌 域名预判：此域名已知属于「${domainSuggestion}」，请注意判断。`
     : ''
 
-  return `你是 BookmarksAI 的智能目录架构师。请严格按以下规则为网页选择分类。
+  return `你是 BookmarkMind AI 的智能目录架构师。请严格按以下规则为网页选择分类。
 
 === 可用目录体系（只允许二级，不允许新造第三级）===
 ${getTaxonomyPrompt()}

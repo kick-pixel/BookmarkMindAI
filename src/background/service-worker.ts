@@ -1,5 +1,5 @@
-// ============================================================
-// BookmarksAI · Background Service Worker
+﻿// ============================================================
+// BookmarkMind AI · Background Service Worker
 // ============================================================
 import {
   initStorage,
@@ -14,6 +14,7 @@ import {
   archiveBookmark,
   getSettings,
   updateSettings,
+  resetFreeAIUsage,
   recordVisit,
   canUseAI,
   incrementAIUsage,
@@ -23,7 +24,12 @@ import {
 } from '../lib/storage'
 import { generateSummary, extractKeywords } from '../lib/ai'
 import { smartClassify } from '../lib/bookmarkClassifier'
-import { getProviderPreset } from '../lib/aiProviders'
+import {
+  FREE_AI_QUOTA_MESSAGE,
+  FREE_AI_UNSTABLE_MESSAGE,
+  isUsingBuiltInFreeAI,
+  resolveAIConfig,
+} from '../lib/aiConfig'
 import type { Bookmark, Message, MessageResponse, ExtractedContent, UserSettings } from '../types'
 
 // ── AI 请求去重节流 ────────────────────────────────────────────
@@ -211,6 +217,19 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
       }
     }
 
+    case 'RESET_FREE_AI_USAGE': {
+      const settings = await resetFreeAIUsage()
+      const usage = await canUseAI()
+      return {
+        success: true,
+        data: {
+          ...usage,
+          used: settings.aiUsageCount,
+          quota: settings.freeQuotaPerMonth,
+        },
+      }
+    }
+
     case 'AI_SUMMARIZE': {
       const { bookmark, content } = msg.payload as { bookmark: Bookmark; content: ExtractedContent }
       const usage = await canUseAI()
@@ -227,6 +246,8 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
         bookmark.summaryGeneratedAt = Date.now()
         await saveBookmark(bookmark)
         await incrementAIUsage()
+      } else if (isUsingBuiltInFreeAI(await getSettings())) {
+        return { success: false, error: FREE_AI_UNSTABLE_MESSAGE }
       }
       return { success: true, data: { summary } }
     }
@@ -345,12 +366,16 @@ async function optimizeImportedBookmarks(importedUrls: string[]): Promise<void> 
             await incrementAIUsage()
             bookmark.aiError = undefined
           } else {
-            bookmark.aiError = 'Summary generation returned empty result'
+            bookmark.aiError = isUsingBuiltInFreeAI(settings)
+              ? FREE_AI_UNSTABLE_MESSAGE
+              : 'Summary generation returned empty result'
           }
         } else if (!aiReady) {
           bookmark.aiError = 'AI provider is not configured'
         } else {
-          bookmark.aiError = 'AI quota exceeded before summary generation'
+          bookmark.aiError = isUsingBuiltInFreeAI(settings)
+            ? FREE_AI_QUOTA_MESSAGE
+            : 'AI quota exceeded before summary generation'
         }
       }
 
@@ -417,17 +442,7 @@ function buildLocalKeywords(content: ExtractedContent): string[] {
 }
 
 function isAIConfigured(settings: UserSettings): boolean {
-  const preset = getProviderPreset(settings.aiProvider)
-  const apiKey = settings.apiKeys[settings.aiProvider]
-  const baseUrl =
-    settings.aiBaseUrls[settings.aiProvider] ||
-    (settings.aiProvider === 'custom' ? settings.customBaseUrl : '') ||
-    preset.baseUrl
-  const model =
-    settings.aiModels[settings.aiProvider] ||
-    (settings.aiProvider === 'custom' ? settings.customModel : '') ||
-    preset.defaultModel
-  return Boolean(apiKey && baseUrl && model)
+  return Boolean(resolveAIConfig(settings))
 }
 
 async function fetchTextPreview(url: string): Promise<string> {
@@ -476,16 +491,6 @@ function createBookmark(content: ExtractedContent): Bookmark {
 // ── 异步 AI 处理流程 ─────────────────────────────────────────
 async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
   const settings = await getSettings()
-  const preset = getProviderPreset(settings.aiProvider)
-  const apiKey = settings.apiKeys[settings.aiProvider]
-  const baseUrl =
-    settings.aiBaseUrls[settings.aiProvider] ||
-    (settings.aiProvider === 'custom' ? settings.customBaseUrl : '') ||
-    preset.baseUrl
-  const model =
-    settings.aiModels[settings.aiProvider] ||
-    (settings.aiProvider === 'custom' ? settings.customModel : '') ||
-    preset.defaultModel
   const hasAnyAIWork =
     settings.autoClassify || settings.autoTag || settings.autoSummary || settings.autoExtractKeywords
 
@@ -494,14 +499,9 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
     return
   }
 
-  if (!apiKey || !baseUrl || !model) {
-    await updateAIStatus(bookmark, 'skipped', 'AI provider is not configured')
-    return
-  }
-
   const usage = await canUseAI()
   if (!usage.allowed) {
-    await updateAIStatus(bookmark, 'skipped', 'AI quota exceeded')
+    await updateAIStatus(bookmark, 'skipped', isUsingBuiltInFreeAI(settings) ? FREE_AI_QUOTA_MESSAGE : 'AI quota exceeded')
     return
   }
 
@@ -540,6 +540,8 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
           bookmark.summary = summary
           bookmark.summaryGeneratedAt = Date.now()
           await incrementAIUsage()
+        } else if (isUsingBuiltInFreeAI(settings)) {
+          bookmark.aiError = FREE_AI_UNSTABLE_MESSAGE
         }
       }
     }
@@ -557,7 +559,9 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
     chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
   } catch (err) {
     bookmark.aiStatus = 'failed'
-    bookmark.aiError = err instanceof Error ? err.message : 'AI processing failed'
+    bookmark.aiError = isUsingBuiltInFreeAI(settings)
+      ? FREE_AI_UNSTABLE_MESSAGE
+      : err instanceof Error ? err.message : 'AI processing failed'
     await saveBookmark(bookmark)
     chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
     console.error('[BAI] AI processing failed:', err)

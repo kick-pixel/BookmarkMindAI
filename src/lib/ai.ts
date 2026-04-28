@@ -1,9 +1,10 @@
-// ============================================================
-// BookmarksAI · OpenAI-compatible AI 服务层
+﻿// ============================================================
+// BookmarkMind AI · OpenAI-compatible AI 服务层
 // ============================================================
 import type { AIConfig, ExtractedContent } from '../types'
 import { inferFolderByRules, normalizeFolderPath } from './bookmarkTaxonomy'
 import { getProviderPreset } from './aiProviders'
+import { resolveAIConfig } from './aiConfig'
 import { getSettings } from './storage'
 import { buildClassifySystemPrompt, buildClassifyUserContent } from './bookmarkClassifier/promptBuilder'
 
@@ -50,27 +51,7 @@ async function chatCompletion(
 // ── 获取当前 AI 配置 ─────────────────────────────────────────
 async function getAIConfig(): Promise<AIConfig | null> {
   const settings = await getSettings()
-
-  const apiKey = settings.apiKeys[settings.aiProvider]
-  if (!apiKey) return null
-  const preset = getProviderPreset(settings.aiProvider)
-  const configuredBaseUrl =
-    settings.aiBaseUrls[settings.aiProvider] ||
-    (settings.aiProvider === 'custom' ? settings.customBaseUrl : '') ||
-    preset.baseUrl
-  const configuredModel =
-    settings.aiModels[settings.aiProvider] ||
-    (settings.aiProvider === 'custom' ? settings.customModel : '') ||
-    preset.defaultModel
-
-  if (!configuredBaseUrl || !configuredModel) return null
-
-  return {
-    provider: settings.aiProvider,
-    apiKey,
-    baseUrl: configuredBaseUrl,
-    model: configuredModel,
-  }
+  return resolveAIConfig(settings)
 }
 
 /**

@@ -586,6 +586,28 @@ body,
   border-color: var(--border-accent);
 }
 
+.bm-action-btn:disabled {
+  cursor: wait;
+  opacity: 0.78;
+}
+
+.bm-action-btn.ai-btn.running {
+  min-width: 44px;
+  color: var(--accent-light);
+  border-color: rgba(35, 213, 255, 0.52);
+  background:
+    linear-gradient(90deg, rgba(35, 213, 255, 0.22), rgba(111, 241, 214, 0.12)),
+    rgba(35, 213, 255, 0.08);
+  box-shadow: 0 0 18px rgba(35, 213, 255, 0.18);
+}
+
+.bookmark-card.ai-running {
+  border-color: rgba(35, 213, 255, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(35, 213, 255, 0.14),
+    0 18px 44px rgba(35, 213, 255, 0.08);
+}
+
 .bm-action-btn.danger:hover {
   background: rgba(255, 107, 138, 0.14);
   color: var(--danger);
@@ -638,6 +660,8 @@ body,
 
 .ai-status-note {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 8px;
   padding: 5px 8px;
   border: 1px solid rgba(151, 203, 255, 0.12);
@@ -645,6 +669,20 @@ body,
   background: rgba(151, 203, 255, 0.06);
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.ai-status-note.running {
+  border-color: rgba(35, 213, 255, 0.34);
+  background:
+    linear-gradient(90deg, rgba(35, 213, 255, 0.14), rgba(111, 241, 214, 0.07)),
+    rgba(151, 203, 255, 0.06);
+  color: var(--accent-light);
+}
+
+.ai-status-note.warning {
+  border-color: rgba(255, 198, 109, 0.28);
+  background: rgba(255, 198, 109, 0.1);
+  color: var(--warning);
 }
 
 .ai-status-note.failed {

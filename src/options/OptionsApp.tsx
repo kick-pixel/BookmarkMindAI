@@ -22,11 +22,11 @@ export default function OptionsApp() {
       ])
       if (settingsRes.success) {
         const loaded = settingsRes.data as UserSettings
-        setSettings({ ...loaded, aiEnabled: true, aiServiceMode: loaded.aiServiceMode ?? 'byok' })
+        setSettings({ ...loaded, aiEnabled: true, aiServiceMode: loaded.aiServiceMode ?? 'hosted' })
         if (!loaded.aiEnabled || !loaded.aiServiceMode) {
           chrome.runtime.sendMessage({
             type: 'UPDATE_SETTINGS',
-            payload: { aiEnabled: true, aiServiceMode: loaded.aiServiceMode ?? 'byok' },
+            payload: { aiEnabled: true, aiServiceMode: loaded.aiServiceMode ?? 'hosted' },
           }).catch(() => {})
         }
       }
@@ -138,12 +138,12 @@ export default function OptionsApp() {
           </button>
           <button
             type="button"
-            className="ai-mode-card disabled"
-            onClick={() => notify(t('hostedModeSoon'))}
+            className={`ai-mode-card ${settings.aiServiceMode === 'hosted' ? 'selected' : ''}`}
+            onClick={() => handleChange({ aiServiceMode: 'hosted', aiEnabled: true })}
           >
-            <span>{t('hostedModeSoonBadge')}</span>
-            <strong>{t('hostedModeTitle')}</strong>
-            <small>{t('hostedModeDesc')}</small>
+            <span>{locale === 'zh-CN' ? '默认可用' : t('hostedModeSoonBadge')}</span>
+            <strong>{locale === 'zh-CN' ? '使用内置免费 AI 模型' : t('hostedModeTitle')}</strong>
+            <small>{locale === 'zh-CN' ? '无需配置 API Key，免费用户每月 100 次 AI 调用；不稳定时建议切换到个人模型。' : t('hostedModeDesc')}</small>
           </button>
         </div>
 
@@ -162,6 +162,9 @@ export default function OptionsApp() {
               <span>{t('usedCount', { used: usage.used })}</span>
               <span>{t('quotaCount', { quota: usage.quota })}</span>
             </div>
+            <button className="btn btn-ghost btn-sm" onClick={handleResetFreeAIUsage}>
+              {t('resetFreeAIUsage')}
+            </button>
 
             {!usage.isPro && (
               <div className="upgrade-banner">
@@ -248,26 +251,23 @@ export default function OptionsApp() {
             </div>
         )}
 
-        {settings.aiServiceMode === 'hosted' && (
-          <div className="hosted-plan-panel">
-            <div className="hosted-plan-card">
-              <strong>{t('aiPlanTitle')}</strong>
-              <span>{t('aiPlanDesc')}</span>
-            </div>
-            <div className="hosted-plan-card premium">
-              <strong>{t('cloudPlanTitle')}</strong>
-              <span>{t('cloudPlanDesc')}</span>
-            </div>
-          </div>
-        )}
       </section>
 
       <section className="opt-section">
         <div className="opt-section-title">{t('automation')}</div>
-        <SettingToggle label={t('autoClassify')} desc={t('autoClassifyDesc')} checked={settings.autoClassify} onChange={checked => handleChange({ autoClassify: checked })} />
-        <SettingToggle label={t('autoTag')} desc={t('autoTagDesc')} checked={settings.autoTag} onChange={checked => handleChange({ autoTag: checked })} />
-        <SettingToggle label={t('autoSummary')} desc={t('autoSummaryDesc')} checked={settings.autoSummary} onChange={checked => handleChange({ autoSummary: checked })} />
-        <SettingToggle label={t('autoKeywords')} desc={t('autoKeywordsDesc')} checked={settings.autoExtractKeywords} onChange={checked => handleChange({ autoExtractKeywords: checked })} />
+        <div className="automation-fixed-card">
+          <div className="automation-fixed-icon">AI</div>
+          <div className="automation-fixed-copy">
+            <div className="opt-row-label">{t('coreAutomationTitle')}</div>
+            <div className="opt-row-desc">{t('coreAutomationDesc')}</div>
+            <div className="automation-chip-row">
+              <span>{t('autoClassify')}</span>
+              <span>{t('autoTag')}</span>
+              <span>{t('autoSummary')}</span>
+              <span>{t('autoKeywords')}</span>
+            </div>
+          </div>
+        </div>
         <SettingToggle label={t('trackVisits')} desc={t('trackVisitsDesc')} checked={settings.trackVisits} onChange={checked => handleChange({ trackVisits: checked })} />
         <SettingToggle label={t('cleanupReminder')} desc={t('cleanupReminderDesc')} checked={settings.cleanupReminder} onChange={checked => handleChange({ cleanupReminder: checked })} />
         <SettingToggle label={t('sendContentToAI')} desc={t('sendContentToAIDesc')} checked={settings.sendContentToAI} onChange={checked => handleChange({ sendContentToAI: checked })} />
@@ -360,17 +360,17 @@ export default function OptionsApp() {
     const date = new Date().toISOString().slice(0, 10)
     if (format === 'json') {
       downloadFile(
-        `bookmarksai-export-${date}.json`,
+        `bookmarkmind-ai-export-${date}.json`,
         JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), settings, bookmarks }, null, 2),
         'application/json',
       )
       return
     }
     if (format === 'markdown') {
-      downloadFile(`bookmarksai-export-${date}.md`, toMarkdown(bookmarks), 'text/markdown')
+      downloadFile(`bookmarkmind-ai-export-${date}.md`, toMarkdown(bookmarks), 'text/markdown')
       return
     }
-    downloadFile(`bookmarksai-export-${date}.html`, toNetscapeHtml(bookmarks), 'text/html')
+    downloadFile(`bookmarkmind-ai-export-${date}.html`, toNetscapeHtml(bookmarks), 'text/html')
   }
 
   async function handleImport() {
@@ -391,6 +391,14 @@ export default function OptionsApp() {
       }
     }
     input.click()
+  }
+
+  async function handleResetFreeAIUsage() {
+    const res = await chrome.runtime.sendMessage({ type: 'RESET_FREE_AI_USAGE' })
+    if (res.success) {
+      setUsage(res.data)
+      notify(t('resetFreeAIUsageDone'))
+    }
   }
 
   async function handleClearAll() {
@@ -441,7 +449,7 @@ function toMarkdown(bookmarks: Bookmark[]): string {
     const group = bookmark.category || 'Uncategorized'
     groups.set(group, [...(groups.get(group) ?? []), bookmark])
   }
-  const lines = ['# BookmarksAI Export', '', `Exported at: ${new Date().toISOString()}`, '']
+  const lines = ['# BookmarkMind AI Export', '', `Exported at: ${new Date().toISOString()}`, '']
   for (const [category, items] of groups) {
     lines.push(`## ${category}`, '')
     for (const bookmark of items) {
@@ -455,26 +463,106 @@ function toMarkdown(bookmarks: Bookmark[]): string {
 }
 
 function toNetscapeHtml(bookmarks: Bookmark[]): string {
-  const groups = new Map<string, Bookmark[]>()
+  const now = Date.now()
+  const root = createExportFolderNode('\u6536\u85cf\u5939\u680f', now)
   for (const bookmark of bookmarks) {
-    const folder = (bookmark.folderPath?.length ? bookmark.folderPath : [bookmark.category || '其他']).join('/')
-    groups.set(folder, [...(groups.get(folder) ?? []), bookmark])
+    addBookmarkToExportTree(root, bookmark)
   }
-  const rows = Array.from(groups.entries()).flatMap(([folder, items]) => [
-    `<DT><H3>${escapeHtml(folder)}</H3>`,
-    '<DL><p>',
-    ...items.map(bookmark =>
-      `<DT><A HREF="${escapeHtml(bookmark.url)}" ADD_DATE="${Math.floor(bookmark.createdAt / 1000)}">${escapeHtml(bookmark.title)}</A>`,
-    ),
-    '</DL><p>',
-  ])
+  const rows = renderExportFolder(root, 1, ' PERSONAL_TOOLBAR_FOLDER="true"')
   return `<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<!-- This is an automatically generated file.
+     It will be read and overwritten.
+     DO NOT EDIT! -->
 <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
-<TITLE>BookmarksAI Export</TITLE>
-<H1>BookmarksAI Export</H1>
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
 <DL><p>
 ${rows.join('\n')}
 </DL><p>`
+}
+
+interface ExportFolderNode {
+  name: string
+  addDate: number
+  lastModified: number
+  folders: Map<string, ExportFolderNode>
+  bookmarks: Bookmark[]
+}
+
+function createExportFolderNode(name: string, timestamp: number): ExportFolderNode {
+  return {
+    name,
+    addDate: timestamp,
+    lastModified: timestamp,
+    folders: new Map(),
+    bookmarks: [],
+  }
+}
+
+function addBookmarkToExportTree(root: ExportFolderNode, bookmark: Bookmark): void {
+  const bookmarkCreatedAt = bookmark.createdAt || Date.now()
+  const bookmarkModifiedAt = bookmark.updatedAt || bookmarkCreatedAt
+  const folderPath = getExportFolderPath(bookmark)
+  let current = root
+
+  current.addDate = Math.min(current.addDate, bookmarkCreatedAt)
+  current.lastModified = Math.max(current.lastModified, bookmarkModifiedAt)
+
+  for (const folderName of folderPath) {
+    const existing = current.folders.get(folderName)
+    const next = existing ?? createExportFolderNode(folderName, bookmarkCreatedAt)
+    next.addDate = Math.min(next.addDate, bookmarkCreatedAt)
+    next.lastModified = Math.max(next.lastModified, bookmarkModifiedAt)
+    if (!existing) current.folders.set(folderName, next)
+    current = next
+  }
+
+  current.bookmarks.push(bookmark)
+}
+
+function getExportFolderPath(bookmark: Bookmark): string[] {
+  const normalized = (bookmark.folderPath?.length
+    ? bookmark.folderPath
+    : [bookmark.category || '\u5176\u4ed6', bookmark.subCategory || '\u5f85\u6574\u7406'])
+    .map(part => part.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+
+  return normalized.length ? normalized : ['\u5176\u4ed6', '\u5f85\u6574\u7406']
+}
+
+function renderExportFolder(node: ExportFolderNode, depth: number, extraAttrs = ''): string[] {
+  const lines = [
+    `${indent(depth)}<DT><H3 ADD_DATE="${toUnixSeconds(node.addDate)}" LAST_MODIFIED="${toUnixSeconds(node.lastModified)}"${extraAttrs}>${escapeHtml(node.name)}</H3>`,
+    `${indent(depth)}<DL><p>`,
+  ]
+
+  for (const child of node.folders.values()) {
+    lines.push(...renderExportFolder(child, depth + 1))
+  }
+
+  for (const bookmark of node.bookmarks) {
+    lines.push(renderExportBookmark(bookmark, depth + 1))
+  }
+
+  lines.push(`${indent(depth)}</DL><p>`)
+  return lines
+}
+
+function renderExportBookmark(bookmark: Bookmark, depth: number): string {
+  const createdAt = bookmark.createdAt || Date.now()
+  const updatedAt = bookmark.updatedAt || createdAt
+  const iconAttr = bookmark.favicon ? ` ICON="${escapeHtml(bookmark.favicon)}"` : ''
+
+  return `${indent(depth)}<DT><A HREF="${escapeHtml(bookmark.url)}" ADD_DATE="${toUnixSeconds(createdAt)}" LAST_MODIFIED="${toUnixSeconds(updatedAt)}"${iconAttr}>${escapeHtml(bookmark.title || bookmark.url)}</A>`
+}
+
+function toUnixSeconds(timestamp: number): number {
+  return Math.floor(timestamp / 1000)
+}
+
+function indent(depth: number): string {
+  return '    '.repeat(depth)
 }
 
 function escapeMarkdown(value: string): string {

@@ -92,10 +92,7 @@ export default function PopupApp() {
   const usagePercent = usage ? Math.min((usage.used / usage.quota) * 100, 100) : 0
   const nearLimit = usagePercent >= 80
   const { t } = createTranslator(settings?.language)
-  const aiConfigured = Boolean(
-    settings?.aiServiceMode === 'hosted' ||
-    Object.values(settings?.apiKeys ?? {}).some(key => Boolean(key?.trim())),
-  )
+  const aiConfigured = Boolean(settings?.aiEnabled)
 
   const statusColor: Record<string, string> = {
     active: 'var(--success)',

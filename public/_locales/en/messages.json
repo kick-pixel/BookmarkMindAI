@@ -1,11 +1,11 @@
 {
   "extName": {
-    "message": "BookmarksAI · AI Knowledge Assistant"
+    "message": "BookmarkMind AI · AI Knowledge Assistant"
   },
   "extDescription": {
     "message": "A local-first AI bookmark manager that categorizes pages, writes summaries, and turns saved links into a searchable personal knowledge base."
   },
-  "openBookmarksAI": {
-    "message": "Open BookmarksAI"
+  "openBookmarkMindAI": {
+    "message": "Open BookmarkMind AI"
   }
 }

@@ -45,6 +45,17 @@ export const AI_PROVIDER_PRESETS: AIProviderPreset[] = [
     enDesc: 'Global model ecosystem for international users',
   },
   {
+    id: 'nvidia',
+    name: 'NVIDIA NIM',
+    region: 'global',
+    baseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultModel: 'deepseek-ai/deepseek-v4-flash',
+    docsUrl: 'https://docs.api.nvidia.com/nim/',
+    zhDesc: '\u82f1\u4f1f\u8fbe NIM OpenAI-compatible API\uff0c\u9002\u5408\u4e2d\u6587\u5206\u7c7b\u3001\u6807\u7b7e\u548c\u6458\u8981',
+    enDesc: 'NVIDIA NIM OpenAI-compatible API for categorization, tagging, and summaries',
+    badge: 'fast',
+  },
+  {
     id: 'openrouter',
     name: 'OpenRouter',
     region: 'global',
