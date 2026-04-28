@@ -4,7 +4,7 @@
 import type { Bookmark, Category, UserSettings } from '../types'
 import { BOOKMARK_TAXONOMY, getAllFolderPaths } from './bookmarkTaxonomy'
 import { IMPORT_STAGING_FOLDER } from './bookmarkImport'
-import { isUsingBuiltInFreeAI } from './aiConfig'
+import { isUsingBuiltInFreeAI, resolveAIConfig } from './aiConfig'
 import {
   clearBookmarkRecords,
   getAllBookmarkRecords,
@@ -492,7 +492,7 @@ export async function canUseAI(): Promise<{ allowed: boolean; remaining: number;
 
   if (settings.aiServiceMode === 'byok') {
     return {
-      allowed: Boolean(settings.apiKeys[settings.aiProvider]),
+      allowed: Boolean(resolveAIConfig(settings)),
       remaining: Infinity,
       isPro: settings.plan === 'pro',
     }

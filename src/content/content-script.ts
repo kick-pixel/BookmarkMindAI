@@ -95,6 +95,42 @@ function createTooltip() {
   return el
 }
 
+function renderTooltipContent(bookmark: {
+  favicon?: string
+  category?: string
+  summary?: string
+}) {
+  if (!tooltip) return
+  tooltip.replaceChildren()
+
+  const header = document.createElement('div')
+  header.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;'
+
+  if (bookmark.favicon) {
+    const img = document.createElement('img')
+    img.src = bookmark.favicon
+    img.alt = ''
+    img.style.cssText = 'width:16px;height:16px;border-radius:3px'
+    header.appendChild(img)
+  }
+
+  const saved = document.createElement('span')
+  saved.textContent = '已收藏'
+  saved.style.cssText = 'font-weight:600;color:#a5b4fc;font-size:12px;'
+  header.appendChild(saved)
+
+  const category = document.createElement('span')
+  category.textContent = bookmark.category ?? ''
+  category.style.cssText = 'margin-left:auto;font-size:11px;color:#64748b;'
+  header.appendChild(category)
+
+  const summary = document.createElement('div')
+  summary.textContent = bookmark.summary ?? ''
+  summary.style.cssText = 'color:#cbd5e1;font-size:12.5px;'
+
+  tooltip.append(header, summary)
+}
+
 let hoverTimer: ReturnType<typeof setTimeout>
 
 document.addEventListener('mouseover', (e) => {
@@ -112,15 +148,7 @@ document.addEventListener('mouseover', (e) => {
     if (!bookmark?.summary) return
 
     if (!tooltip) tooltip = createTooltip()
-
-    tooltip.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        ${bookmark.favicon ? `<img src="${bookmark.favicon}" style="width:16px;height:16px;border-radius:3px">` : ''}
-        <span style="font-weight:600;color:#a5b4fc;font-size:12px;">📌 已收藏</span>
-        <span style="margin-left:auto;font-size:11px;color:#64748b;">${bookmark.category}</span>
-      </div>
-      <div style="color:#cbd5e1;font-size:12.5px;">${bookmark.summary}</div>
-    `
+    renderTooltipContent(bookmark)
 
     const rect = anchor.getBoundingClientRect()
     tooltip.style.left = `${Math.min(rect.left, window.innerWidth - 340)}px`

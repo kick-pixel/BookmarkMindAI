@@ -5,6 +5,14 @@ import { createTranslator } from '../lib/i18n'
 import type { AIProvider, AppLanguage, Bookmark, UserSettings } from '../types'
 
 type UsageInfo = { used: number; quota: number; isPro: boolean }
+const SHOW_UPGRADE_LINKS = false
+
+async function requestPageReadPermission(): Promise<boolean> {
+  const permissions = { origins: ['<all_urls>'] }
+  const hasPermission = await chrome.permissions.contains(permissions).catch(() => false)
+  if (hasPermission) return true
+  return chrome.permissions.request(permissions).catch(() => false)
+}
 
 export default function OptionsApp() {
   const [settings, setSettings] = useState<UserSettings | null>(null)
@@ -204,7 +212,7 @@ export default function OptionsApp() {
               {t('resetFreeAIUsage')}
             </button>
 
-            {!usage.isPro && (
+            {!usage.isPro && SHOW_UPGRADE_LINKS && (
               <div className="upgrade-banner">
                 <div className="upgrade-price">楼68 <span>/ year</span></div>
                 <div className="upgrade-copy">
@@ -420,6 +428,7 @@ export default function OptionsApp() {
       const text = await file.text()
       try {
         const bookmarks = parseImportedBookmarks(file.name, text)
+        await requestPageReadPermission()
         const res = await chrome.runtime.sendMessage({ type: 'IMPORT_BOOKMARKS', payload: bookmarks })
         if (!res.success) throw new Error(res.error)
         notify(t('importDone', res.data))

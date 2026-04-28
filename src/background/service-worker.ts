@@ -265,6 +265,8 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
       if (!bookmark) return { success: false, error: 'BOOKMARK_NOT_FOUND' }
       bookmark.aiStatus = 'pending'
       bookmark.aiError = undefined
+      bookmark.summary = undefined
+      bookmark.summaryGeneratedAt = undefined
       await saveBookmark(bookmark)
       chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
       const content = await buildImportedContent(bookmark, { includeExistingSummary: false })
@@ -433,6 +435,20 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
 
 async function extractContentFromTab(tab: chrome.tabs.Tab): Promise<ExtractedContent> {
   if (tab.id) {
+    const injected = await chrome.scripting
+      .executeScript({
+        target: { tabId: tab.id },
+        func: extractPageContentInPage,
+      })
+      .catch(() => null)
+    const injectedContent = injected?.[0]?.result as ExtractedContent | undefined
+    if (injectedContent?.url) {
+      return {
+        ...injectedContent,
+        favicon: injectedContent.favicon || tab.favIconUrl,
+      }
+    }
+
     const response = await chrome.tabs
       .sendMessage(tab.id, { type: 'EXTRACT_CONTENT' })
       .catch(() => null)
@@ -450,6 +466,49 @@ async function extractContentFromTab(tab: chrome.tabs.Tab): Promise<ExtractedCon
     description: '',
     mainContent: '',
     favicon: tab.favIconUrl,
+  }
+}
+
+function extractPageContentInPage(): ExtractedContent {
+  function cleanText(text: string): string {
+    return text
+      .replace(/\s+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+
+  function extractMainText(): string {
+    const prioritySelectors = ['article', 'main', '[role="main"]', '.post-content', '.article-body']
+    for (const selector of prioritySelectors) {
+      const element = document.querySelector(selector)
+      if (element) return cleanText(element.textContent ?? '').slice(0, 3000)
+    }
+
+    const body = document.body.cloneNode(true) as HTMLElement
+    ;['script', 'style', 'nav', 'footer', 'header', 'aside', '.sidebar', '.ad', '.advertisement']
+      .forEach(selector => body.querySelectorAll(selector).forEach(element => element.remove()))
+
+    return cleanText(body.textContent ?? '').slice(0, 3000)
+  }
+
+  const description =
+    (document.querySelector('meta[property="og:description"]') as HTMLMetaElement)?.content ||
+    (document.querySelector('meta[name="description"]') as HTMLMetaElement)?.content ||
+    ''
+  const ogImage =
+    (document.querySelector('meta[property="og:image"]') as HTMLMetaElement)?.content || undefined
+  const favicon =
+    (document.querySelector('link[rel="icon"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="shortcut icon"]') as HTMLLinkElement)?.href ||
+    `${location.origin}/favicon.ico`
+
+  return {
+    title: document.title || '',
+    url: location.href,
+    description,
+    mainContent: extractMainText(),
+    ogImage,
+    favicon,
   }
 }
 

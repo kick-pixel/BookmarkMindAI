@@ -97,6 +97,13 @@ function getFolderChildren(categories: Category[], rootName: string): string[] {
   return [...new Set([...taxonomyChildren, ...userChildren])]
 }
 
+async function requestPageReadPermission(): Promise<boolean> {
+  const permissions = { origins: ['<all_urls>'] }
+  const hasPermission = await chrome.permissions.contains(permissions).catch(() => false)
+  if (hasPermission) return true
+  return chrome.permissions.request(permissions).catch(() => false)
+}
+
 export default function SidePanelApp() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -387,6 +394,7 @@ export default function SidePanelApp() {
       if (!file) return
       const text = await file.text()
       const imported = parseImportedBookmarks(file.name, text)
+      await requestPageReadPermission()
       const res = await chrome.runtime.sendMessage({ type: 'IMPORT_BOOKMARKS', payload: imported })
       if (res.success) {
         const [bmRes, catRes] = await Promise.all([

@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { createTranslator } from '../lib/i18n'
 import type { Bookmark, ExtractedContent, UserSettings } from '../types'
 
+const SHOW_UPGRADE_LINKS = false
+
 interface UsageInfo {
   allowed: boolean
   remaining: number
@@ -70,7 +72,8 @@ export default function PopupApp() {
         }
       }
 
-      const res = await chrome.runtime.sendMessage({ type: 'SAVE_BOOKMARK', payload: content })
+      void content
+      const res = await chrome.runtime.sendMessage({ type: 'SAVE_CURRENT_TAB' })
       if (res.success) {
         setIsSaved(true)
         setRecentBookmarks(prev => [res.data, ...prev].slice(0, 5))
@@ -184,7 +187,7 @@ export default function PopupApp() {
           <span className="text-xs" style={{ color: nearLimit ? 'var(--warning)' : 'var(--text-muted)', minWidth: 40 }}>
             {usage.used}/{usage.quota}
           </span>
-          {nearLimit && (
+          {nearLimit && SHOW_UPGRADE_LINKS && (
             <button
               className="btn btn-primary btn-sm"
               onClick={() => chrome.tabs.create({ url: 'https://bookmarksai.app/upgrade' })}
