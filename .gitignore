@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+out/
+*.tsbuildinfo
+
+docs/
+
+# Vite / tool caches
+.vite/
+.vite-temp/
+node_modules/.vite/
+node_modules/.vite-temp/
+.eslintcache
+.cache/
+.parcel-cache/
+
+# Extension packaging artifacts
+*.crx
+*.pem
+*.zip
+*.xpi
+web-ext-artifacts/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+secrets/
+
+# Test / coverage
+coverage/
+test-results/
+playwright-report/
+blob-report/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+
+# Local scratch directories
+-p/

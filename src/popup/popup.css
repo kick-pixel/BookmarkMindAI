@@ -1,0 +1,329 @@
+html,
+body {
+  width: 390px;
+  min-height: 540px;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 540px;
+}
+
+.popup-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(135deg, rgba(35, 213, 255, 0.1), transparent 48%),
+    var(--bg-surface);
+}
+
+.popup-header::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+
+.popup-logo {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 11px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 17px;
+  box-shadow: var(--shadow-sm);
+}
+
+.popup-title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.popup-subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.popup-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.current-page {
+  position: relative;
+  margin: 14px;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(180deg, rgba(35, 213, 255, 0.11), rgba(117, 167, 255, 0.03)),
+    var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  animation: riseLedger 0.34s ease both;
+}
+
+.current-page::before {
+  content: "CURRENT";
+  position: absolute;
+  top: 10px;
+  right: -28px;
+  transform: rotate(32deg);
+  color: rgba(124, 244, 255, 0.09);
+  font: 700 18px/1 var(--font-mono);
+  letter-spacing: 0.18em;
+}
+
+.current-page-title {
+  margin-bottom: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.current-page-url {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-btn {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 800;
+  transition: transform var(--transition), box-shadow var(--transition), background var(--transition);
+}
+
+.save-btn:hover:not(:disabled) {
+  background: var(--accent-light);
+  box-shadow: var(--shadow-accent);
+  transform: translateY(-1px);
+}
+
+.save-btn:disabled {
+  opacity: 0.78;
+  cursor: not-allowed;
+}
+
+.save-btn.saved {
+  background: var(--success);
+  color: #07120d;
+}
+
+.setup-card {
+  display: grid;
+  grid-template-columns: 34px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  margin: 0 14px 12px;
+  padding: 12px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(35, 213, 255, 0.14), rgba(117, 167, 255, 0.05)),
+    rgba(3, 10, 24, 0.58);
+}
+
+.setup-card-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.setup-card-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setup-card-copy strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.setup-card-copy span {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.usage-bar {
+  margin: 0 14px 12px;
+  padding: 9px 11px;
+  background: rgba(151, 203, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-bar-track {
+  flex: 1;
+  height: 5px;
+  background: rgba(151, 203, 255, 0.08);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.usage-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+  border-radius: 99px;
+  transition: width 0.5s ease;
+}
+
+.usage-bar-fill.near-limit {
+  background: linear-gradient(90deg, var(--warning), var(--danger));
+}
+
+.recent-section {
+  flex: 1;
+  padding: 0 14px;
+}
+
+.section-title {
+  margin-bottom: 9px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.bookmark-mini-card {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  margin-bottom: 7px;
+  background: rgba(151, 203, 255, 0.055);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.bookmark-mini-card:hover {
+  background: rgba(151, 203, 255, 0.09);
+  border-color: var(--border-accent);
+  transform: translateX(3px);
+}
+
+.bookmark-favicon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.bookmark-mini-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.bookmark-mini-title {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-mini-cat {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.popup-footer {
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  background: rgba(5, 9, 20, 0.9);
+}
+
+.popup-footer .btn {
+  flex: 1;
+}
+
+.saved-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  background: rgba(56, 245, 167, 0.16);
+  color: var(--success);
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.empty-state {
+  margin-top: 22px;
+  text-align: center;
+  padding: 24px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xl);
+  font-size: 12px;
+}
+
+.empty-state .emoji {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
