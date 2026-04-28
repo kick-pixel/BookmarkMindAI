@@ -2,9 +2,9 @@
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { BOOKMARK_TAXONOMY } from '../lib/bookmarkTaxonomy'
 import { createTranslator } from '../lib/i18n'
-import type { Bookmark, Category, UserSettings } from '../types'
+import type { Bookmark, Category, ProcessingTask, UserSettings } from '../types'
 
-type FilterStatus = 'all' | 'active' | 'idle' | 'sleeping'
+type FilterStatus = 'all' | 'active' | 'idle' | 'sleeping' | 'needsReview' | 'aiFailed' | 'noSummary' | 'duplicates' | 'inbox'
 type SortKey = 'newest' | 'oldest' | 'visited' | 'alpha'
 
 const TAXONOMY_ROOTS = new Set(BOOKMARK_TAXONOMY.map(group => group.name))
@@ -23,6 +23,22 @@ function getFolderLabel(bookmark: Bookmark): string {
   return getFolderKey(bookmark)
 }
 
+function getDuplicateKey(bookmark: Bookmark): string {
+  return bookmark.normalizedUrl || bookmark.url.trim().replace(/\/$/, '')
+}
+
+function isInboxBookmark(bookmark: Bookmark): boolean {
+  return getFolderKey(bookmark) === '其他/待整理' || !bookmark.aiCategorized
+}
+
+function hasAIProblem(bookmark: Bookmark): boolean {
+  return bookmark.aiStatus === 'failed' || Boolean(bookmark.aiError)
+}
+
+function lacksSummary(bookmark: Bookmark): boolean {
+  return bookmark.aiStatus !== 'pending' && !bookmark.summary?.trim()
+}
+
 function expandSearchTokens(query: string): string[] {
   const baseTokens = query
     .toLowerCase()
@@ -36,6 +52,10 @@ function expandSearchTokens(query: string): string[] {
     web3: ['web3', 'blockchain', '区块链', 'solana', 'ethereum', 'defi', 'nft', 'faucet', 'airdrop', 'wallet'],
     区块链: ['区块链', 'web3', 'blockchain', 'solana', 'ethereum', 'defi', 'nft', '智能合约'],
     solana: ['solana', 'web3', 'blockchain', '区块链', 'faucet', 'airdrop', 'phantom'],
+    ai: ['ai', 'llm', 'openai', 'deepseek', 'agent', 'prompt', '模型', '人工智能'],
+    llm: ['llm', 'ai', 'openai', 'deepseek', '模型', '大模型', 'agent'],
+    数据库: ['数据库', 'database', 'sql', 'mysql', 'postgres', 'postgresql', 'redis'],
+    设计: ['设计', 'design', 'ui', 'ux', 'figma', '产品设计'],
   }
   return [...new Set(baseTokens.flatMap(token => synonyms[token] ?? [token]))]
 }
@@ -87,6 +107,8 @@ export default function SidePanelApp() {
   const [sortKey, setSortKey] = useState<SortKey>('newest')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [reprocessingIds, setReprocessingIds] = useState<Set<string>>(() => new Set())
+  const [processingTask, setProcessingTask] = useState<ProcessingTask | null>(null)
+  const [dismissedProcessingTaskIds, setDismissedProcessingTaskIds] = useState<Set<string>>(() => new Set())
   const [loading, setLoading] = useState(true)
   const [now] = useState(() => Date.now())
   const { t } = createTranslator(settings?.language)
@@ -97,43 +119,112 @@ export default function SidePanelApp() {
     active: t('active'),
     idle: t('idle'),
     sleeping: t('sleeping'),
+    needsReview: t('needsReview'),
+    aiFailed: t('aiFailedFilter'),
+    noSummary: t('noSummaryFilter'),
+    duplicates: t('duplicatesFilter'),
+    inbox: t('inboxFilter'),
   }
 
   useEffect(() => {
     async function loadData() {
-      const [bmRes, catRes, settingsRes] = await Promise.all([
+      const [bmRes, catRes, settingsRes, taskRes] = await Promise.all([
         chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
         chrome.runtime.sendMessage({ type: 'GET_CATEGORIES' }),
         chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }),
+        chrome.runtime.sendMessage({ type: 'GET_PROCESSING_TASK' }),
       ])
       if (bmRes.success) setBookmarks(bmRes.data.filter((b: Bookmark) => !b.isArchived))
       if (catRes.success) setCategories(catRes.data)
       if (settingsRes.success) setSettings(settingsRes.data)
+      if (taskRes.success) setProcessingTask(taskRes.data)
       setLoading(false)
     }
 
     void loadData()
-    const handler = (msg: { type: string; payload: Bookmark }) => {
+    const handler = (msg: { type: string; payload: Bookmark | ProcessingTask }) => {
       if (msg.type === 'BOOKMARK_UPDATED') {
-        setBookmarks(prev => prev.map(b => b.id === msg.payload.id ? msg.payload : b))
-        if (msg.payload.aiStatus !== 'pending') {
+        const bookmark = msg.payload as Bookmark
+        setBookmarks(prev => prev.map(b => b.id === bookmark.id ? bookmark : b))
+        if (bookmark.aiStatus !== 'pending') {
           setReprocessingIds(prev => {
             const next = new Set(prev)
-            next.delete(msg.payload.id)
+            next.delete(bookmark.id)
             return next
           })
         }
+      }
+      if (msg.type === 'PROCESSING_TASK_UPDATED') {
+        setProcessingTask(msg.payload as ProcessingTask)
       }
     }
     chrome.runtime.onMessage.addListener(handler)
     return () => chrome.runtime.onMessage.removeListener(handler)
   }, [])
 
-  const stats = useMemo(() => ({
-    total: bookmarks.length,
-    active: bookmarks.filter(b => b.status === 'active').length,
-    sleeping: bookmarks.filter(b => b.status === 'sleeping').length,
-  }), [bookmarks])
+  const duplicateKeys = useMemo(() => {
+    const counts = new Map<string, number>()
+    bookmarks.forEach(bookmark => {
+      const key = getDuplicateKey(bookmark)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    })
+    return new Set(Array.from(counts.entries()).filter(([, count]) => count > 1).map(([key]) => key))
+  }, [bookmarks])
+
+  const stats = useMemo(() => {
+    const usedRoots = new Set<string>()
+    const usedChildren = new Set<string>()
+    for (const bookmark of bookmarks) {
+      const [root, child] = getFolderPath(bookmark)
+      usedRoots.add(root)
+      if (child) usedChildren.add(`${root}/${child}`)
+    }
+    const rootById = new Map(categories.filter(category => !category.parentId).map(category => [category.id, category]))
+    const emptyUserChildIds = new Set(
+      categories
+        .filter(category => category.id.startsWith('user_') && category.parentId)
+        .filter(category => {
+          const parent = rootById.get(category.parentId!)
+          return !parent || !usedChildren.has(`${parent.name}/${category.name}`)
+        })
+        .map(category => category.id),
+    )
+    const keptChildrenByParent = new Set(
+      categories
+        .filter(category => category.parentId && !emptyUserChildIds.has(category.id))
+        .map(category => category.parentId!),
+    )
+    const emptyFolders = categories.filter(category => {
+      if (!category.id.startsWith('user_')) return false
+      if (category.parentId) return emptyUserChildIds.has(category.id)
+      return !usedRoots.has(category.name) && !keptChildrenByParent.has(category.id)
+    }).length
+    const aiFailed = bookmarks.filter(hasAIProblem).length
+    const noSummary = bookmarks.filter(lacksSummary).length
+    const duplicates = bookmarks.filter(bookmark => duplicateKeys.has(getDuplicateKey(bookmark))).length
+    const inbox = bookmarks.filter(isInboxBookmark).length
+    const needsReviewIds = new Set(
+      bookmarks
+        .filter(bookmark =>
+          hasAIProblem(bookmark) ||
+          lacksSummary(bookmark) ||
+          isInboxBookmark(bookmark) ||
+          duplicateKeys.has(getDuplicateKey(bookmark))
+        )
+        .map(bookmark => bookmark.id),
+    )
+    return {
+      total: bookmarks.length,
+      active: bookmarks.filter(b => b.status === 'active').length,
+      sleeping: bookmarks.filter(b => b.status === 'sleeping').length,
+      aiFailed,
+      noSummary,
+      duplicates,
+      inbox,
+      emptyFolders,
+      needsReview: needsReviewIds.size,
+    }
+  }, [bookmarks, categories, duplicateKeys])
 
   const rootCategories = useMemo(() => getRootCategories(categories), [categories])
 
@@ -194,20 +285,34 @@ export default function SidePanelApp() {
 
   const displayedBookmarks = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
-    if (query) {
-      return bookmarks
-        .map(bookmark => ({ bookmark, score: scoreBookmark(bookmark, query) }))
-        .filter(item => item.score > 0)
-        .sort((a, b) => b.score - a.score || b.bookmark.createdAt - a.bookmark.createdAt)
-        .map(item => item.bookmark)
-    }
-
     let list = bookmarks
 
     if (selectedCat !== 'all') {
       list = list.filter(b => getFolderKey(b) === selectedCat || getFolderPath(b)[0] === selectedCat)
     }
-    if (filterStatus !== 'all') list = list.filter(b => b.status === filterStatus)
+    if (filterStatus === 'active' || filterStatus === 'idle' || filterStatus === 'sleeping') {
+      list = list.filter(b => b.status === filterStatus)
+    }
+    if (filterStatus === 'needsReview') {
+      list = list.filter(bookmark =>
+        hasAIProblem(bookmark) ||
+        lacksSummary(bookmark) ||
+        isInboxBookmark(bookmark) ||
+        duplicateKeys.has(getDuplicateKey(bookmark))
+      )
+    }
+    if (filterStatus === 'aiFailed') list = list.filter(hasAIProblem)
+    if (filterStatus === 'noSummary') list = list.filter(lacksSummary)
+    if (filterStatus === 'duplicates') list = list.filter(bookmark => duplicateKeys.has(getDuplicateKey(bookmark)))
+    if (filterStatus === 'inbox') list = list.filter(isInboxBookmark)
+
+    if (query) {
+      return list
+        .map(bookmark => ({ bookmark, score: scoreBookmark(bookmark, query) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score || b.bookmark.createdAt - a.bookmark.createdAt)
+        .map(item => item.bookmark)
+    }
 
     return [...list].sort((a, b) => {
       switch (sortKey) {
@@ -218,7 +323,36 @@ export default function SidePanelApp() {
         default: return 0
       }
     })
-  }, [bookmarks, selectedCat, filterStatus, searchQuery, sortKey, scoreBookmark])
+  }, [bookmarks, selectedCat, filterStatus, searchQuery, sortKey, scoreBookmark, duplicateKeys])
+
+  const handleRetryFailed = useCallback(async () => {
+    const res = await chrome.runtime.sendMessage({ type: 'RETRY_FAILED_BOOKMARKS' })
+    if (res.success) {
+      const taskRes = await chrome.runtime.sendMessage({ type: 'GET_PROCESSING_TASK' })
+      if (taskRes.success) setProcessingTask(taskRes.data)
+    }
+  }, [])
+
+  const handleDismissProcessingTask = useCallback((taskId: string) => {
+    setDismissedProcessingTaskIds(prev => new Set(prev).add(taskId))
+    setProcessingTask(null)
+    chrome.runtime.sendMessage({ type: 'DISMISS_PROCESSING_TASK', payload: taskId }).catch(() => {})
+  }, [])
+
+  const handleCleanDuplicates = useCallback(async () => {
+    if (!confirm(t('cleanDuplicatesConfirm', { count: stats.duplicates }))) return
+    const res = await chrome.runtime.sendMessage({ type: 'CLEAN_DUPLICATE_BOOKMARKS' })
+    if (res.success) {
+      setBookmarks(res.data.bookmarks.filter((bookmark: Bookmark) => !bookmark.isArchived))
+      setFilterStatus('all')
+    }
+  }, [stats.duplicates, t])
+
+  const handleCleanEmptyFolders = useCallback(async () => {
+    if (!confirm(t('cleanEmptyFoldersConfirm', { count: stats.emptyFolders }))) return
+    const res = await chrome.runtime.sendMessage({ type: 'CLEAN_EMPTY_FOLDERS' })
+    if (res.success) setCategories(res.data)
+  }, [stats.emptyFolders, t])
 
   const handleDelete = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -421,6 +555,15 @@ export default function SidePanelApp() {
         </section>
       )}
 
+      {processingTask && processingTask.status !== 'completed' && !dismissedProcessingTaskIds.has(processingTask.id) && (
+        <ProcessingTaskCard
+          task={processingTask}
+          onRetryFailed={handleRetryFailed}
+          onDismiss={handleDismissProcessingTask}
+          t={t}
+        />
+      )}
+
       <div className="sp-body">
         <nav className="sp-sidebar">
           <div className="sidebar-title-row">
@@ -489,6 +632,10 @@ export default function SidePanelApp() {
                 <div className="stat-num success">{stats.active}</div>
                 <div className="stat-label">{t('activeBookmarks')}</div>
               </div>
+              <button className="stat-card stat-button" onClick={() => setFilterStatus('needsReview')}>
+                <div className={`stat-num ${stats.needsReview > 0 ? 'warn' : 'success'}`}>{stats.needsReview}</div>
+                <div className="stat-label">{t('needsReview')}</div>
+              </button>
               <div className="stat-card">
                 <div className="stat-num muted">{stats.sleeping}</div>
                 <div className="stat-label">{t('sleepingBookmarks')}</div>
@@ -499,7 +646,24 @@ export default function SidePanelApp() {
           <div className="sp-ops compact">
             <div>
               <strong>{t('resultCount', { count: displayedBookmarks.length })}</strong>
-              <span>{searchQuery ? t('searchPlaceholder') : t('editTagsCta')}</span>
+              <span>{stats.needsReview > 0 ? t('healthSummary', { count: stats.needsReview }) : searchQuery ? t('searchPlaceholder') : t('editTagsCta')}</span>
+            </div>
+            <div className="sp-ops-actions">
+              {stats.noSummary + stats.aiFailed + stats.inbox > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={handleRetryFailed}>
+                  {t('repairWithAI')}
+                </button>
+              )}
+              {stats.duplicates > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={handleCleanDuplicates}>
+                  {t('cleanDuplicates')}
+                </button>
+              )}
+              {stats.emptyFolders > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={handleCleanEmptyFolders}>
+                  {t('cleanEmptyFolders')}
+                </button>
+              )}
             </div>
           </div>
 
@@ -551,6 +715,59 @@ export default function SidePanelApp() {
         </main>
       </div>
     </div>
+  )
+}
+
+function ProcessingTaskCard({
+  task,
+  onRetryFailed,
+  onDismiss,
+  t,
+}: {
+  task: ProcessingTask
+  onRetryFailed: () => void
+  onDismiss: (taskId: string) => void
+  t: ReturnType<typeof createTranslator>['t']
+}) {
+  const percent = task.total > 0 ? Math.round((task.processed / task.total) * 100) : 0
+  const isRunning = task.status === 'running'
+  const title = task.type === 'retry' ? t('processingRetry') : t('processingImport')
+
+  return (
+    <section className={`processing-task-card ${task.status}`}>
+      <div className="processing-task-head">
+        <div>
+          <strong>{title}</strong>
+          <span>
+            {isRunning
+              ? t('processingRunning', { processed: task.processed, total: task.total })
+              : t('processingFailed', { failed: task.failed })}
+          </span>
+        </div>
+        <div className="processing-task-meta">
+          <div className="processing-task-percent">{percent}%</div>
+          <button
+            type="button"
+            className="processing-task-close"
+            aria-label={t('dismiss')}
+            onClick={() => onDismiss(task.id)}
+          >
+            ×
+          </button>
+        </div>
+      </div>
+      <div className="processing-task-track">
+        <div className="processing-task-fill" style={{ width: `${percent}%` }} />
+      </div>
+      <div className="processing-task-foot">
+        <span>{task.currentTitle || t('localProcessing')}</span>
+        {task.failed > 0 && !isRunning && (
+          <button className="btn btn-ghost btn-sm" onClick={onRetryFailed}>
+            {t('retryFailed')}
+          </button>
+        )}
+      </div>
+    </section>
   )
 }
 

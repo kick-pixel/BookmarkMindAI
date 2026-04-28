@@ -162,6 +162,14 @@ npm run build
 5. 在侧边栏中搜索、筛选、编辑和整理书签。
 6. 如需迁移旧收藏夹，导入 Chrome / Edge 导出的 HTML 文件。
 
+## 快捷入口
+
+- 点击扩展图标：打开快速收藏弹窗。
+- 右键网页空白处：选择“保存并整理此页面”或“打开 BookmarkMind AI 面板”。
+- 快捷键 `Alt+B`：打开扩展弹窗。
+- 快捷键 `Alt+Shift+S`：保存当前页面并触发 AI 整理。
+- 快捷键 `Alt+Shift+M`：打开 BookmarkMind AI 侧边栏。
+
 ## 导入收藏夹逻辑
 
 导入 Chrome / Edge 收藏夹 HTML 时：
@@ -180,8 +188,26 @@ npm run build
 - Vite
 - Chrome Extension Manifest V3
 - Chrome Side Panel API
-- Chrome Storage Local
+- IndexedDB：存储书签主体、摘要、标签、关键词、AI 状态等高容量数据
+- Chrome Storage Local：存储设置、目录、迁移标记和轻量状态
 - OpenAI-compatible Chat Completions API
+
+## 本地数据层与云同步兼容
+
+当前版本已将书签主体迁移到 IndexedDB：
+
+- 首次启动会自动把旧版本 `chrome.storage.local` 中的 `bai_bookmarks` 迁移到 IndexedDB。
+- 迁移成功后会移除旧的大数组，释放 `chrome.storage.local` 容量。
+- 设置、目录、免费 AI 用量、迁移版本仍保存在 `chrome.storage.local`，便于快速读取和兼容 Manifest V3。
+- 删除书签采用云同步友好的 tombstone 字段：`deletedAt`、`syncState: pending_delete`。
+- 每个书签预留云同步字段：`remoteId`、`syncState`、`syncVersion`、`syncUpdatedAt`。
+- 普通本地读取会过滤已删除 tombstone；未来接入云同步时，同步层可以读取这些字段处理创建、更新、删除和冲突。
+
+后续接入云端时建议保持三层结构：
+
+1. 本地仓储层：IndexedDB，负责离线可用和快速检索。
+2. 同步队列层：读取 `syncState`，批量上传 pending changes，处理冲突。
+3. 云端 API 层：账号、设备、远程书签、版本号、删除 tombstone 和增量同步。
 
 ## 目录结构
 
@@ -239,3 +265,17 @@ dist/               构建产物
 
 - 产品需求：[AI书签插件产品需求分析.md](./AI书签插件产品需求分析.md)
 - 上线与推广：[docs/上线与推广计划.md](./docs/上线与推广计划.md)
+
+## 本地模式优化路线
+
+当前本地模式优先保证“简单、可见、可恢复”：
+
+- P0：导入 Chrome / Edge 收藏夹后，会显示本地 AI 整理进度、已处理数量和失败数量。
+- P0：失败或未生成摘要的书签可以一键重试，不需要用户逐条排查。
+- P0：用户手动移动书签到其他目录时，会记录为本地分类偏好，后续同类网页会优先参考用户习惯。
+- P0：搜索会同时参考标题、域名、URL、目录、标签、摘要、备注、关键词和原始导入目录，并尊重当前目录和状态筛选。
+- P1：侧边栏提供本地体检入口，可筛选待处理、AI 失败、缺摘要、重复书签和待整理书签。
+- P1：支持按 URL 清理重复书签，优先保留摘要更完整、访问更多、更新时间更新的版本。
+- P1：支持清理没有书签的自定义空目录，减少目录树噪音。
+- P1：继续完善目录治理，包括低频目录、非规范目录的合并建议。
+- P2：当本地数据规模增大后，将书签主体从 `chrome.storage.local` 迁移到 `IndexedDB`，保留 `chrome.storage.local` 存储设置和轻量索引。

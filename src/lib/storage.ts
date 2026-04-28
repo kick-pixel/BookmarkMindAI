@@ -5,11 +5,20 @@ import type { Bookmark, Category, UserSettings } from '../types'
 import { BOOKMARK_TAXONOMY, getAllFolderPaths } from './bookmarkTaxonomy'
 import { IMPORT_STAGING_FOLDER } from './bookmarkImport'
 import { isUsingBuiltInFreeAI } from './aiConfig'
+import {
+  clearBookmarkRecords,
+  getAllBookmarkRecords,
+  getBookmarkRecordById,
+  markBookmarkRecordsDeleted,
+  putBookmarkRecord,
+  putBookmarkRecords,
+} from './bookmarkRepository'
 
 const KEYS = {
   BOOKMARKS: 'bai_bookmarks',
   CATEGORIES: 'bai_categories',
   SETTINGS: 'bai_settings',
+  BOOKMARKS_IDB_MIGRATION: 'bai_bookmarks_idb_migration',
 } as const
 
 const CORE_AI_AUTOMATION_SETTINGS = {
@@ -55,14 +64,45 @@ export const DEFAULT_CATEGORIES: Category[] = [
 ]
 
 // ── 书签 CRUD ────────────────────────────────────────────────
+let bookmarkMigrationPromise: Promise<void> | null = null
+
+async function migrateBookmarksToIndexedDB(): Promise<void> {
+  if (bookmarkMigrationPromise) return bookmarkMigrationPromise
+  const migrationTask = (async () => {
+    const result = await chrome.storage.local.get([KEYS.BOOKMARKS_IDB_MIGRATION, KEYS.BOOKMARKS])
+    const migration = result[KEYS.BOOKMARKS_IDB_MIGRATION] as { version?: number } | undefined
+    if ((migration?.version ?? 0) >= 1) return
+
+    const legacyBookmarks = result[KEYS.BOOKMARKS] as Bookmark[] | undefined
+    if (legacyBookmarks?.length) {
+      const normalized = legacyBookmarks.map(bookmark => markBookmarkForMigration(normalizeBookmark(bookmark)))
+      await putBookmarkRecords(normalized)
+    }
+
+    await chrome.storage.local.set({
+      [KEYS.BOOKMARKS_IDB_MIGRATION]: {
+        version: 1,
+        migratedAt: Date.now(),
+        count: legacyBookmarks?.length ?? 0,
+      },
+    })
+    await chrome.storage.local.remove(KEYS.BOOKMARKS)
+  })()
+  bookmarkMigrationPromise = migrationTask.catch(err => {
+    bookmarkMigrationPromise = null
+    throw err
+  })
+  return bookmarkMigrationPromise
+}
+
 export async function getAllBookmarks(): Promise<Bookmark[]> {
-  const result = await chrome.storage.local.get(KEYS.BOOKMARKS)
-  return (result[KEYS.BOOKMARKS] as Bookmark[] | undefined) ?? []
+  await migrateBookmarksToIndexedDB()
+  return getAllBookmarkRecords()
 }
 
 export async function getBookmarkById(id: string): Promise<Bookmark | undefined> {
-  const bookmarks = await getAllBookmarks()
-  return bookmarks.find(b => b.id === id)
+  await migrateBookmarksToIndexedDB()
+  return getBookmarkRecordById(id)
 }
 
 export async function saveBookmark(bookmark: Bookmark): Promise<Bookmark> {
@@ -74,7 +114,7 @@ export async function saveBookmark(bookmark: Bookmark): Promise<Bookmark> {
     const existing = bookmarks[idx]
     const isSameBookmark = existing.id === normalized.id
     saved = isSameBookmark
-      ? { ...existing, ...normalized, updatedAt: Date.now() }
+      ? markBookmarkForLocalWrite({ ...existing, ...normalized }, existing)
       : {
           ...existing,
           title: normalized.title || existing.title,
@@ -82,14 +122,14 @@ export async function saveBookmark(bookmark: Bookmark): Promise<Bookmark> {
           domain: normalized.domain || existing.domain,
           normalizedUrl: normalized.normalizedUrl || existing.normalizedUrl,
           isArchived: false,
-          updatedAt: Date.now(),
         }
+    saved = markBookmarkForLocalWrite(saved, existing)
     bookmarks[idx] = saved
   } else {
-    saved = normalized
+    saved = markBookmarkForLocalWrite(normalized)
     bookmarks.unshift(saved)
   }
-  await chrome.storage.local.set({ [KEYS.BOOKMARKS]: bookmarks })
+  await putBookmarkRecord(saved)
   const categories = await getCategories()
   ensureCategoryEntries(categories, saved.folderPath ?? [saved.category])
   await chrome.storage.local.set({ [KEYS.CATEGORIES]: categories })
@@ -124,14 +164,15 @@ export async function saveBookmarksBulk(
       skipped += 1
       continue
     }
-    existing.unshift(normalized)
-    byUrl.set(normalized.normalizedUrl ?? normalizeUrl(normalized.url), normalized)
-    importedUrls.push(normalized.url)
-    ensureCategoryEntries(categories, normalized.folderPath ?? [...IMPORT_STAGING_FOLDER])
+    const saved = markBookmarkForLocalWrite(normalized)
+    existing.unshift(saved)
+    byUrl.set(saved.normalizedUrl ?? normalizeUrl(saved.url), saved)
+    importedUrls.push(saved.url)
+    ensureCategoryEntries(categories, saved.folderPath ?? [...IMPORT_STAGING_FOLDER])
     imported += 1
   }
 
-  await chrome.storage.local.set({ [KEYS.BOOKMARKS]: existing })
+  await putBookmarkRecords(existing)
   await chrome.storage.local.set({ [KEYS.CATEGORIES]: categories })
   return { imported, skipped, importedUrls, reprocessUrls }
 }
@@ -177,16 +218,21 @@ export async function migrateLegacyImportedBookmarks(): Promise<string[]> {
 
   ensureCategoryEntries(categories, [...IMPORT_STAGING_FOLDER])
   await chrome.storage.local.set({
-    [KEYS.BOOKMARKS]: migrated,
     [KEYS.CATEGORIES]: categories,
   })
+  await putBookmarkRecords(migrated.map(bookmark => markBookmarkForLocalWrite(bookmark, bookmark)))
   return migratedUrls
 }
 
 export async function deleteBookmark(id: string): Promise<void> {
-  const bookmarks = await getAllBookmarks()
-  const filtered = bookmarks.filter(b => b.id !== id)
-  await chrome.storage.local.set({ [KEYS.BOOKMARKS]: filtered })
+  await migrateBookmarksToIndexedDB()
+  await markBookmarkRecordsDeleted([id])
+}
+
+export async function deleteBookmarksBulk(ids: string[]): Promise<Bookmark[]> {
+  if (!ids.length) return getAllBookmarks()
+  await migrateBookmarksToIndexedDB()
+  return markBookmarkRecordsDeleted(ids)
 }
 
 export async function archiveBookmark(id: string): Promise<void> {
@@ -204,7 +250,7 @@ export async function recordVisit(url: string): Promise<void> {
     bm.lastVisitedAt = Date.now()
     bm.visitCount = (bm.visitCount ?? 0) + 1
     bm.status = computeStatus(bm)
-    await chrome.storage.local.set({ [KEYS.BOOKMARKS]: bookmarks })
+    await saveBookmark(bm)
   }
 }
 
@@ -248,6 +294,34 @@ function normalizeBookmark(bookmark: Bookmark): Bookmark {
     sourceFolderPath: bookmark.sourceFolderPath?.map(part => part.trim()).filter(Boolean),
     folderPath: normalizeStoredFolderPath(bookmark.folderPath, bookmark.category),
     isArchived: bookmark.isArchived ?? false,
+  }
+}
+
+function markBookmarkForMigration(bookmark: Bookmark): Bookmark {
+  const now = bookmark.updatedAt ?? bookmark.createdAt ?? Date.now()
+  return {
+    ...bookmark,
+    syncState: bookmark.syncState ?? 'pending_create',
+    syncVersion: bookmark.syncVersion ?? 1,
+    syncUpdatedAt: bookmark.syncUpdatedAt ?? now,
+  }
+}
+
+function markBookmarkForLocalWrite(bookmark: Bookmark, existing?: Bookmark): Bookmark {
+  const now = Date.now()
+  const existingState = existing?.syncState
+  const nextSyncState =
+    existingState === 'pending_create'
+      ? 'pending_create'
+      : 'pending_update'
+
+  return {
+    ...bookmark,
+    deletedAt: undefined,
+    updatedAt: now,
+    syncState: existing ? nextSyncState : 'pending_create',
+    syncVersion: (existing?.syncVersion ?? bookmark.syncVersion ?? 0) + 1,
+    syncUpdatedAt: now,
   }
 }
 
@@ -300,8 +374,8 @@ export async function deleteCategory(categoryId: string): Promise<{ categories: 
   if (!target) return { categories, bookmarks: await getAllBookmarks() }
 
   const childIds = new Set(categories.filter(category => category.parentId === target.id).map(category => category.id))
-  const deleteIds = new Set([target.id, ...childIds])
-  const remainingCategories = categories.filter(category => !deleteIds.has(category.id))
+  const categoryDeleteIds = new Set([target.id, ...childIds])
+  const remainingCategories = categories.filter(category => !categoryDeleteIds.has(category.id))
   const bookmarks = await getAllBookmarks()
   const parent = target.parentId ? categories.find(category => category.id === target.parentId) : undefined
 
@@ -314,11 +388,49 @@ export async function deleteCategory(categoryId: string): Promise<{ categories: 
     return !shouldDelete
   })
 
-  await chrome.storage.local.set({
-    [KEYS.CATEGORIES]: remainingCategories,
-    [KEYS.BOOKMARKS]: remainingBookmarks,
+  const remainingIds = new Set(remainingBookmarks.map(bookmark => bookmark.id))
+  const deleteIds = bookmarks.filter(bookmark => !remainingIds.has(bookmark.id)).map(bookmark => bookmark.id)
+  await markBookmarkRecordsDeleted(deleteIds)
+  await chrome.storage.local.set({ [KEYS.CATEGORIES]: remainingCategories })
+  return { categories: remainingCategories, bookmarks: await getAllBookmarks() }
+}
+
+export async function cleanEmptyUserCategories(): Promise<Category[]> {
+  const categories = await getCategories()
+  const bookmarks = await getAllBookmarks()
+  const usedRoots = new Set<string>()
+  const usedChildren = new Set<string>()
+
+  for (const bookmark of bookmarks.filter(bookmark => !bookmark.isArchived)) {
+    const [root, child] = normalizeStoredFolderPath(bookmark.folderPath, bookmark.category)
+    usedRoots.add(root)
+    if (child) usedChildren.add(`${root}/${child}`)
+  }
+
+  const rootById = new Map(categories.filter(category => !category.parentId).map(category => [category.id, category]))
+  const emptyUserChildIds = new Set(
+    categories
+      .filter(category => category.id.startsWith('user_') && category.parentId)
+      .filter(category => {
+        const parent = rootById.get(category.parentId!)
+        return !parent || !usedChildren.has(`${parent.name}/${category.name}`)
+      })
+      .map(category => category.id),
+  )
+  const keptChildrenByParent = new Set(
+    categories
+      .filter(category => category.parentId && !emptyUserChildIds.has(category.id))
+      .map(category => category.parentId!),
+  )
+
+  const remaining = categories.filter(category => {
+    if (!category.id.startsWith('user_')) return true
+    if (category.parentId) return !emptyUserChildIds.has(category.id)
+    return usedRoots.has(category.name) || keptChildrenByParent.has(category.id)
   })
-  return { categories: remainingCategories, bookmarks: remainingBookmarks }
+
+  await chrome.storage.local.set({ [KEYS.CATEGORIES]: remaining })
+  return remaining
 }
 
 function ensureCategoryEntries(categories: Category[], folderPath: string[]): void {
@@ -356,10 +468,9 @@ export async function getSettings(): Promise<UserSettings> {
     aiEnabled: true,
     ...CORE_AI_AUTOMATION_SETTINGS,
   }
-  const hasAnyApiKey = Object.values(settings.apiKeys ?? {}).some(key => Boolean(key?.trim()))
   return {
     ...settings,
-    aiServiceMode: settings.aiServiceMode === 'byok' && !hasAnyApiKey ? 'hosted' : settings.aiServiceMode,
+    aiServiceMode: settings.aiServiceMode ?? 'hosted',
   }
 }
 
@@ -379,8 +490,12 @@ export async function updateSettings(partial: Partial<UserSettings>): Promise<Us
 export async function canUseAI(): Promise<{ allowed: boolean; remaining: number; isPro: boolean }> {
   const settings = await getSettings()
 
-  if (settings.aiServiceMode === 'byok' && settings.apiKeys[settings.aiProvider]) {
-    return { allowed: true, remaining: Infinity, isPro: settings.plan === 'pro' }
+  if (settings.aiServiceMode === 'byok') {
+    return {
+      allowed: Boolean(settings.apiKeys[settings.aiProvider]),
+      remaining: Infinity,
+      isPro: settings.plan === 'pro',
+    }
   }
 
   if (settings.plan === 'pro') {
@@ -413,7 +528,14 @@ export async function resetFreeAIUsage(): Promise<UserSettings> {
 }
 
 // ── 初始化 ────────────────────────────────────────────────────
+export async function clearLocalData(): Promise<void> {
+  await clearBookmarkRecords()
+  bookmarkMigrationPromise = null
+  await chrome.storage.local.clear()
+}
+
 export async function initStorage(): Promise<void> {
+  await migrateBookmarksToIndexedDB()
   const settings = await getSettings()
   if (!settings) await updateSettings(DEFAULT_SETTINGS)
 

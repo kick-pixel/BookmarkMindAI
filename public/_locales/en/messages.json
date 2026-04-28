@@ -7,5 +7,23 @@
   },
   "openBookmarkMindAI": {
     "message": "Open BookmarkMind AI"
+  },
+  "saveCurrentPageCommand": {
+    "message": "Save current page to BookmarkMind AI"
+  },
+  "openSidePanelCommand": {
+    "message": "Open BookmarkMind AI side panel"
+  },
+  "contextSavePage": {
+    "message": "Save and organize this page"
+  },
+  "contextOpenPanel": {
+    "message": "Open BookmarkMind AI panel"
+  },
+  "notificationSavedTitle": {
+    "message": "Saved to BookmarkMind AI"
+  },
+  "notificationSavedMessage": {
+    "message": "AI is organizing this bookmark in the background."
   }
 }

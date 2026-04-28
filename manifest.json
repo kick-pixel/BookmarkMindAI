@@ -40,6 +40,7 @@
     "activeTab",
     "tabs",
     "sidePanel",
+    "contextMenus",
     "notifications",
     "alarms"
   ],
@@ -56,6 +57,18 @@
         "default": "Alt+B"
       },
       "description": "__MSG_openBookmarkMindAI__"
+    },
+    "save-current-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "__MSG_saveCurrentPageCommand__"
+    },
+    "open-side-panel": {
+      "suggested_key": {
+        "default": "Alt+Shift+M"
+      },
+      "description": "__MSG_openSidePanelCommand__"
     }
   }
 }

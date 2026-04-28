@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+﻿import React, { useCallback, useEffect, useState } from 'react'
 import { AI_PROVIDER_PRESETS, getProviderPreset } from '../lib/aiProviders'
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { createTranslator } from '../lib/i18n'
@@ -12,8 +12,10 @@ export default function OptionsApp() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'saving'>('idle')
   const [usage, setUsage] = useState<UsageInfo | null>(null)
   const [toast, setToast] = useState('')
+  const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
+  const languageSwitcherRef = React.useRef<HTMLDivElement | null>(null)
 
-  const { locale, t } = createTranslator(settings?.language)
+  const { t } = createTranslator(settings?.language)
   useEffect(() => {
     async function load() {
       const [settingsRes, usageRes] = await Promise.all([
@@ -34,6 +36,27 @@ export default function OptionsApp() {
     }
     load()
   }, [])
+
+  useEffect(() => {
+    if (!languageMenuOpen) return
+
+    function closeLanguageMenu(event: MouseEvent) {
+      if (!languageSwitcherRef.current?.contains(event.target as Node)) {
+        setLanguageMenuOpen(false)
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setLanguageMenuOpen(false)
+    }
+
+    document.addEventListener('mousedown', closeLanguageMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('mousedown', closeLanguageMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [languageMenuOpen])
 
   const notify = useCallback((message: string) => {
     setToast(message)
@@ -92,6 +115,11 @@ export default function OptionsApp() {
     (settings.aiProvider === 'custom' ? settings.customModel : '') ||
     selectedPreset.defaultModel
   const showHostedUsage = settings.aiServiceMode === 'hosted'
+  const languageOptions: Array<{ value: AppLanguage; label: string }> = [
+    { value: 'auto', label: t('autoLanguage') },
+    { value: 'zh-CN', label: t('chinese') },
+    { value: 'en', label: t('english') },
+  ]
 
   return (
     <main className="opt-shell">
@@ -102,26 +130,36 @@ export default function OptionsApp() {
           <h1>{t('optionsTitle')}</h1>
           <p>{t('optionsSubtitle')}</p>
         </div>
-      </header>
-
-      <section className="opt-section opt-ledger">
-        <div className="opt-section-title">{t('language')}</div>
-        <div className="opt-row">
-          <div className="opt-row-info">
-            <div className="opt-row-label">{t('language')}</div>
-            <div className="opt-row-desc">{t('languageDesc')}</div>
-          </div>
-          <select
-            className="input opt-select"
-            value={settings.language}
-            onChange={event => handleChange({ language: event.target.value as AppLanguage })}
+        <div ref={languageSwitcherRef} className={`language-switcher ${languageMenuOpen ? 'open' : ''}`}>
+          <button
+            type="button"
+            className="language-trigger"
+            aria-label={t('language')}
+            aria-expanded={languageMenuOpen}
+            onClick={() => setLanguageMenuOpen(open => !open)}
           >
-            <option value="auto">{t('autoLanguage')}</option>
-            <option value="zh-CN">{t('chinese')}</option>
-            <option value="en">{t('english')}</option>
-          </select>
+            <span className="language-glyph">文A</span>
+          </button>
+          {languageMenuOpen && (
+            <div className="language-menu" role="menu">
+              {languageOptions.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="menuitem"
+                  className={settings.language === option.value ? 'active' : ''}
+                  onClick={() => {
+                    handleChange({ language: option.value })
+                    setLanguageMenuOpen(false)
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      </section>
+      </header>
 
       <section className="opt-section">
         <div className="opt-section-title">{t('aiService')}</div>
@@ -141,9 +179,9 @@ export default function OptionsApp() {
             className={`ai-mode-card ${settings.aiServiceMode === 'hosted' ? 'selected' : ''}`}
             onClick={() => handleChange({ aiServiceMode: 'hosted', aiEnabled: true })}
           >
-            <span>{locale === 'zh-CN' ? '默认可用' : t('hostedModeSoonBadge')}</span>
-            <strong>{locale === 'zh-CN' ? '使用内置免费 AI 模型' : t('hostedModeTitle')}</strong>
-            <small>{locale === 'zh-CN' ? '无需配置 API Key，免费用户每月 100 次 AI 调用；不稳定时建议切换到个人模型。' : t('hostedModeDesc')}</small>
+            <span>{t('hostedModeSoonBadge')}</span>
+            <strong>{t('hostedModeTitle')}</strong>
+            <small>{t('hostedModeDesc')}</small>
           </button>
         </div>
 
@@ -168,7 +206,7 @@ export default function OptionsApp() {
 
             {!usage.isPro && (
               <div className="upgrade-banner">
-                <div className="upgrade-price">¥68 <span>/ year</span></div>
+                <div className="upgrade-price">楼68 <span>/ year</span></div>
                 <div className="upgrade-copy">
                   <strong>{t('upgradeTitle')}</strong>
                   <span>{t('upgradeDesc')}</span>
@@ -183,9 +221,16 @@ export default function OptionsApp() {
 
         {settings.aiServiceMode === 'byok' && (
             <div className="quick-ai-panel">
-              <div className="quick-ai-copy">
-                <div className="opt-row-label">{t('quickAISetup')}</div>
-                <div className="opt-row-desc">{t('quickAISetupDesc')}</div>
+              <div className="quick-ai-head">
+                <div className="quick-ai-copy">
+                  <div className="opt-row-label">{t('quickAISetup')}</div>
+                  <div className="opt-row-desc">{t('quickAISetupDesc')}</div>
+                </div>
+                {selectedPreset.docsUrl && (
+                  <a className="btn btn-ghost btn-sm" href={selectedPreset.docsUrl} target="_blank" rel="noopener noreferrer">
+                    {t('providerDocs')}
+                  </a>
+                )}
               </div>
               <div className="quick-ai-grid">
                 <label>
@@ -220,14 +265,6 @@ export default function OptionsApp() {
                   </div>
                 </label>
               </div>
-              {selectedPreset.docsUrl && (
-                <div className="quick-ai-doc-row">
-                  <span>{locale === 'zh-CN' ? '当前预设会自动填入默认 Base URL 和模型名。需要自定义时可直接改下面两项。' : 'The selected preset fills Base URL and model automatically. Edit the fields below only when needed.'}</span>
-                  <a className="btn btn-ghost btn-sm" href={selectedPreset.docsUrl} target="_blank" rel="noopener noreferrer">
-                    {t('providerDocs')}
-                  </a>
-                </div>
-              )}
               <div className="quick-ai-grid advanced-inline">
                 <label>
                   <span>{t('customApiUrl')}</span>
@@ -403,7 +440,7 @@ export default function OptionsApp() {
 
   async function handleClearAll() {
     if (!confirm(t('clearConfirm'))) return
-    await chrome.storage.local.clear()
+    await chrome.runtime.sendMessage({ type: 'CLEAR_ALL_DATA' })
     window.location.reload()
   }
 }

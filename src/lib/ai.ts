@@ -221,7 +221,8 @@ ${body}`
   try {
     const prompt = buildSummarySystemPrompt(options?.category, options?.subCategory)
     return await chatCompletion(config, prompt, userContent, 300)
-  } catch {
+  } catch (err) {
+    if (settings.aiServiceMode === 'byok') throw err
     return null
   }
 }

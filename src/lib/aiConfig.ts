@@ -14,7 +14,10 @@ export const FREE_AI_UNSTABLE_MESSAGE =
 export const FREE_AI_QUOTA_MESSAGE =
   '\u5185\u7f6e\u514d\u8d39\u6a21\u578b\u672c\u6708\u989d\u5ea6\u5df2\u7528\u5b8c\uff0c\u5efa\u8bae\u5230\u8bbe\u7f6e\u4e2d\u5207\u6362\u4e3a\u201c\u4e2a\u4eba\u6a21\u578b\u201d\uff0c\u4f7f\u7528\u81ea\u5df1\u7684 API Key \u540e\u4e0d\u53d7\u63d2\u4ef6\u989d\u5ea6\u9650\u5236\u3002'
 
-export function resolveAIConfig(settings: UserSettings): AIConfig {
+export const BYOK_CONFIG_REQUIRED_MESSAGE =
+  '\u4e2a\u4eba\u6a21\u578b\u914d\u7f6e\u4e0d\u5b8c\u6574\uff0c\u8bf7\u786e\u8ba4 API Key\u3001API Base URL \u548c\u6a21\u578b\u540d\u79f0\u5df2\u6b63\u786e\u586b\u5199\u3002'
+
+export function resolveAIConfig(settings: UserSettings): AIConfig | null {
   const preset = getProviderPreset(settings.aiProvider)
   const apiKey = settings.apiKeys[settings.aiProvider]
   const configuredBaseUrl =
@@ -35,6 +38,10 @@ export function resolveAIConfig(settings: UserSettings): AIConfig {
     }
   }
 
+  if (settings.aiServiceMode === 'byok') {
+    return null
+  }
+
   return {
     provider: BUILT_IN_FREE_AI.provider,
     apiKey: BUILT_IN_FREE_AI.apiKey,
@@ -44,5 +51,5 @@ export function resolveAIConfig(settings: UserSettings): AIConfig {
 }
 
 export function isUsingBuiltInFreeAI(settings: UserSettings): boolean {
-  return !(settings.aiServiceMode === 'byok' && settings.apiKeys[settings.aiProvider])
+  return settings.aiServiceMode === 'hosted'
 }

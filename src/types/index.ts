@@ -28,6 +28,12 @@ export interface AIConfig {
 
 export type BookmarkStatus = 'active' | 'idle' | 'sleeping' | 'dead'
 export type BookmarkAIStatus = 'pending' | 'done' | 'skipped' | 'failed'
+export type BookmarkSyncState =
+  | 'pending_create'
+  | 'pending_update'
+  | 'pending_delete'
+  | 'synced'
+  | 'conflict'
 // active: 30天内访问  idle: 30-90天  sleeping: 90天+  dead: 链接失效
 
 export interface Bookmark {
@@ -64,6 +70,11 @@ export interface Bookmark {
   contentHash?: string
   isArchived: boolean
   chromeBmId?: string // 对应 Chrome 原生书签 ID
+  remoteId?: string // 后续云同步服务端 ID
+  syncState?: BookmarkSyncState
+  syncVersion?: number
+  syncUpdatedAt?: number
+  deletedAt?: number // 云同步 tombstone；普通本地读取会过滤
 }
 
 export interface Category {
@@ -113,6 +124,19 @@ export interface UsageStats {
   topCategories: { name: string; count: number }[]
 }
 
+export interface ProcessingTask {
+  id: string
+  type: 'import' | 'retry'
+  status: 'running' | 'completed' | 'failed'
+  total: number
+  processed: number
+  failed: number
+  currentTitle?: string
+  startedAt: number
+  updatedAt: number
+  error?: string
+}
+
 // 消息通信类型
 export type MessageType =
   | 'SAVE_BOOKMARK'
@@ -121,6 +145,7 @@ export type MessageType =
   | 'UPDATE_BOOKMARK'
   | 'REPROCESS_BOOKMARK'
   | 'DELETE_BOOKMARK'
+  | 'CLEAN_DUPLICATE_BOOKMARKS'
   | 'ARCHIVE_BOOKMARK'
   | 'AI_CLASSIFY'
   | 'AI_SUMMARIZE'
@@ -128,10 +153,15 @@ export type MessageType =
   | 'UPDATE_SETTINGS'
   | 'GET_USAGE'
   | 'RESET_FREE_AI_USAGE'
+  | 'CLEAR_ALL_DATA'
+  | 'GET_PROCESSING_TASK'
+  | 'DISMISS_PROCESSING_TASK'
+  | 'RETRY_FAILED_BOOKMARKS'
   | 'RECORD_VISIT'
   | 'GET_CATEGORIES'
   | 'CREATE_CATEGORY'
   | 'DELETE_CATEGORY'
+  | 'CLEAN_EMPTY_FOLDERS'
   | 'GET_BOOKMARK_BY_URL'
   | 'EXTRACT_CONTENT'
   | 'IMPORT_BOOKMARKS'

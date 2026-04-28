@@ -7,5 +7,23 @@
   },
   "openBookmarkMindAI": {
     "message": "打开 BookmarkMind AI"
+  },
+  "saveCurrentPageCommand": {
+    "message": "保存当前页面到 BookmarkMind AI"
+  },
+  "openSidePanelCommand": {
+    "message": "打开 BookmarkMind AI 侧边栏"
+  },
+  "contextSavePage": {
+    "message": "保存并整理此页面"
+  },
+  "contextOpenPanel": {
+    "message": "打开 BookmarkMind AI 面板"
+  },
+  "notificationSavedTitle": {
+    "message": "已保存到 BookmarkMind AI"
+  },
+  "notificationSavedMessage": {
+    "message": "AI 正在后台整理这个书签。"
   }
 }
