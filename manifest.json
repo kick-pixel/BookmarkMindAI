@@ -28,6 +28,18 @@
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/content-script.ts"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
   "permissions": [
     "bookmarks",
     "storage",
@@ -39,9 +51,6 @@
     "contextMenus",
     "notifications",
     "alarms"
-  ],
-  "optional_host_permissions": [
-    "<all_urls>"
   ],
   "options_ui": {
     "page": "src/options/options.html",

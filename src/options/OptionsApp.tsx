@@ -4,21 +4,12 @@ import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { createTranslator } from '../lib/i18n'
 import type { AIProvider, AppLanguage, Bookmark, UserSettings } from '../types'
 
-type UsageInfo = { used: number; quota: number; isPro: boolean }
 const SHOW_UPGRADE_LINKS = false
-
-async function requestPageReadPermission(): Promise<boolean> {
-  const permissions = { origins: ['<all_urls>'] }
-  const hasPermission = await chrome.permissions.contains(permissions).catch(() => false)
-  if (hasPermission) return true
-  return chrome.permissions.request(permissions).catch(() => false)
-}
 
 export default function OptionsApp() {
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [showKeys, setShowKeys] = useState<Partial<Record<AIProvider, boolean>>>({})
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'saving'>('idle')
-  const [usage, setUsage] = useState<UsageInfo | null>(null)
   const [toast, setToast] = useState('')
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
   const languageSwitcherRef = React.useRef<HTMLDivElement | null>(null)
@@ -26,21 +17,11 @@ export default function OptionsApp() {
   const { t } = createTranslator(settings?.language)
   useEffect(() => {
     async function load() {
-      const [settingsRes, usageRes] = await Promise.all([
-        chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }),
-        chrome.runtime.sendMessage({ type: 'GET_USAGE' }),
-      ])
+      const settingsRes = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
       if (settingsRes.success) {
         const loaded = settingsRes.data as UserSettings
-        setSettings({ ...loaded, aiEnabled: true, aiServiceMode: loaded.aiServiceMode ?? 'hosted' })
-        if (!loaded.aiEnabled || !loaded.aiServiceMode) {
-          chrome.runtime.sendMessage({
-            type: 'UPDATE_SETTINGS',
-            payload: { aiEnabled: true, aiServiceMode: loaded.aiServiceMode ?? 'hosted' },
-          }).catch(() => {})
-        }
+        setSettings({ ...loaded, aiEnabled: true })
       }
-      if (usageRes.success) setUsage(usageRes.data)
     }
     load()
   }, [])
@@ -73,7 +54,10 @@ export default function OptionsApp() {
 
   const handleChange = useCallback(async (patch: Partial<UserSettings>) => {
     if (!settings) return
-    const updated = { ...settings, ...patch }
+    // 先从 storage 读取最新值再合并，避免并发写入覆盖
+    const settingsRes = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+    const latest = settingsRes?.success ? settingsRes.data : settings
+    const updated = { ...latest, ...patch }
     setSettings(updated)
     setSaveStatus('saving')
     await chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: patch })
@@ -83,24 +67,36 @@ export default function OptionsApp() {
 
   const setApiKey = useCallback((provider: AIProvider, key: string) => {
     if (!settings) return
-    handleChange({ apiKeys: { ...settings.apiKeys, [provider]: key } })
-  }, [settings, handleChange])
+    // 只发送当前 provider 的 key，updateSettings 会做深度合并保留其他 provider
+    const patch = { apiKeys: { [provider]: key } }
+    setSettings(prev => prev ? { ...prev, apiKeys: { ...prev.apiKeys, [provider]: key } } : prev)
+    setSaveStatus('saving')
+    chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: patch })
+      .then(() => setSaveStatus('saved'))
+      .catch(() => setSaveStatus('idle'))
+    window.setTimeout(() => setSaveStatus('idle'), 1800)
+  }, [settings])
 
   const selectProvider = useCallback((provider: AIProvider) => {
     if (!settings) return
     const preset = getProviderPreset(provider)
-    const nextBaseUrls = { ...settings.aiBaseUrls }
-    const nextModels = { ...settings.aiModels }
-    if (provider !== 'custom') {
-      nextBaseUrls[provider] = preset.baseUrl
-      nextModels[provider] = preset.defaultModel
-    }
-    handleChange({
+    const patch: Partial<UserSettings> = {
       aiProvider: provider,
-      aiBaseUrls: nextBaseUrls,
-      aiModels: nextModels,
+      aiBaseUrls: { [provider]: preset.baseUrl },
+      aiModels: { [provider]: preset.defaultModel },
+    }
+    setSettings(prev => {
+      if (!prev) return prev
+      const nextBaseUrls = { ...prev.aiBaseUrls, [provider]: preset.baseUrl }
+      const nextModels = { ...prev.aiModels, [provider]: preset.defaultModel }
+      return { ...prev, aiProvider: provider, aiBaseUrls: nextBaseUrls, aiModels: nextModels }
     })
-  }, [settings, handleChange])
+    setSaveStatus('saving')
+    chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: patch })
+      .then(() => setSaveStatus('saved'))
+      .catch(() => setSaveStatus('idle'))
+    window.setTimeout(() => setSaveStatus('idle'), 1800)
+  }, [settings])
 
   if (!settings) {
     return (
@@ -111,8 +107,6 @@ export default function OptionsApp() {
     )
   }
 
-  const usagePct = usage ? Math.min((usage.used / usage.quota) * 100, 100) : 0
-  const nearLimit = usagePct >= 80
   const selectedPreset = getProviderPreset(settings.aiProvider)
   const currentBaseUrl =
     settings.aiBaseUrls[settings.aiProvider] ||
@@ -122,7 +116,6 @@ export default function OptionsApp() {
     settings.aiModels[settings.aiProvider] ||
     (settings.aiProvider === 'custom' ? settings.customModel : '') ||
     selectedPreset.defaultModel
-  const showHostedUsage = settings.aiServiceMode === 'hosted'
   const languageOptions: Array<{ value: AppLanguage; label: string }> = [
     { value: 'auto', label: t('autoLanguage') },
     { value: 'zh-CN', label: t('chinese') },
@@ -172,130 +165,72 @@ export default function OptionsApp() {
       <section className="opt-section">
         <div className="opt-section-title">{t('aiService')}</div>
 
-        <div className="ai-mode-grid">
-          <button
-            type="button"
-            className={`ai-mode-card ${settings.aiServiceMode === 'byok' ? 'selected' : ''}`}
-            onClick={() => handleChange({ aiServiceMode: 'byok', aiEnabled: true })}
-          >
-            <span>{t('byokMode')}</span>
-            <strong>{t('byokModeTitle')}</strong>
-            <small>{t('byokModeDesc')}</small>
-          </button>
-          <button
-            type="button"
-            className={`ai-mode-card ${settings.aiServiceMode === 'hosted' ? 'selected' : ''}`}
-            onClick={() => handleChange({ aiServiceMode: 'hosted', aiEnabled: true })}
-          >
-            <span>{t('hostedModeSoonBadge')}</span>
-            <strong>{t('hostedModeTitle')}</strong>
-            <small>{t('hostedModeDesc')}</small>
-          </button>
-        </div>
-
-        {usage && showHostedUsage && (
-          <div className="usage-widget">
-            <div className="usage-header">
-              <span className="text-sm text-secondary">{t('monthlyUsage')}</span>
-              <span className={`usage-plan ${usage.isPro ? 'plan-pro' : 'plan-free'}`}>
-                {usage.isPro ? t('proUser') : t('freePlan')}
-              </span>
+        <div className="quick-ai-panel">
+          <div className="quick-ai-head">
+            <div className="quick-ai-copy">
+              <div className="opt-row-label">{t('quickAISetup')}</div>
+              <div className="opt-row-desc">{t('quickAISetupDesc')}</div>
             </div>
-            <div className="usage-track">
-              <div className={`usage-fill ${nearLimit ? 'warn' : 'ok'}`} style={{ width: `${usagePct}%` }} />
-            </div>
-            <div className="flex justify-between text-xs text-muted">
-              <span>{t('usedCount', { used: usage.used })}</span>
-              <span>{t('quotaCount', { quota: usage.quota })}</span>
-            </div>
-            <button className="btn btn-ghost btn-sm" onClick={handleResetFreeAIUsage}>
-              {t('resetFreeAIUsage')}
-            </button>
-
-            {!usage.isPro && SHOW_UPGRADE_LINKS && (
-              <div className="upgrade-banner">
-                <div className="upgrade-price">楼68 <span>/ year</span></div>
-                <div className="upgrade-copy">
-                  <strong>{t('upgradeTitle')}</strong>
-                  <span>{t('upgradeDesc')}</span>
-                </div>
-                <button className="btn btn-primary" onClick={() => chrome.tabs.create({ url: 'https://bookmarksai.app/upgrade' })}>
-                  {t('upgrade')}
-                </button>
-              </div>
+            {selectedPreset.docsUrl && (
+              <a className="btn btn-ghost btn-sm" href={selectedPreset.docsUrl} target="_blank" rel="noopener noreferrer">
+                {t('providerDocs')}
+              </a>
             )}
           </div>
-        )}
-
-        {settings.aiServiceMode === 'byok' && (
-            <div className="quick-ai-panel">
-              <div className="quick-ai-head">
-                <div className="quick-ai-copy">
-                  <div className="opt-row-label">{t('quickAISetup')}</div>
-                  <div className="opt-row-desc">{t('quickAISetupDesc')}</div>
-                </div>
-                {selectedPreset.docsUrl && (
-                  <a className="btn btn-ghost btn-sm" href={selectedPreset.docsUrl} target="_blank" rel="noopener noreferrer">
-                    {t('providerDocs')}
-                  </a>
-                )}
+          <div className="quick-ai-grid">
+            <label>
+              <span>{t('selectedProvider')}</span>
+              <select
+                className="input"
+                value={settings.aiProvider}
+                onChange={event => selectProvider(event.target.value as AIProvider)}
+              >
+                {AI_PROVIDER_PRESETS.map(provider => (
+                  <option key={provider.id} value={provider.id}>{provider.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>{t('apiKey')}</span>
+              <div className="api-key-input-wrapper compact">
+                <input
+                  className="input"
+                  type={showKeys[settings.aiProvider] ? 'text' : 'password'}
+                  placeholder="sk-..."
+                  value={settings.apiKeys[settings.aiProvider] ?? ''}
+                  onChange={event => setApiKey(settings.aiProvider, event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="api-key-toggle"
+                  onClick={() => setShowKeys(prev => ({ ...prev, [settings.aiProvider]: !prev[settings.aiProvider] }))}
+                >
+                  {showKeys[settings.aiProvider] ? 'Hide' : 'Show'}
+                </button>
               </div>
-              <div className="quick-ai-grid">
-                <label>
-                  <span>{t('selectedProvider')}</span>
-                  <select
-                    className="input"
-                    value={settings.aiProvider}
-                    onChange={event => selectProvider(event.target.value as AIProvider)}
-                  >
-                    {AI_PROVIDER_PRESETS.map(provider => (
-                      <option key={provider.id} value={provider.id}>{provider.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>{t('apiKey')}</span>
-                  <div className="api-key-input-wrapper compact">
-                    <input
-                      className="input"
-                      type={showKeys[settings.aiProvider] ? 'text' : 'password'}
-                      placeholder="sk-..."
-                      value={settings.apiKeys[settings.aiProvider] ?? ''}
-                      onChange={event => setApiKey(settings.aiProvider, event.target.value)}
-                    />
-                    <button
-                      type="button"
-                      className="api-key-toggle"
-                      onClick={() => setShowKeys(prev => ({ ...prev, [settings.aiProvider]: !prev[settings.aiProvider] }))}
-                    >
-                      {showKeys[settings.aiProvider] ? 'Hide' : 'Show'}
-                    </button>
-                  </div>
-                </label>
-              </div>
-              <div className="quick-ai-grid advanced-inline">
-                <label>
-                  <span>{t('customApiUrl')}</span>
-                  <input
-                    className="input"
-                    value={currentBaseUrl}
-                    onChange={event => updateProviderBaseUrl(settings.aiProvider, event.target.value)}
-                    placeholder="https://your-api.example.com/v1"
-                  />
-                </label>
-                <label>
-                  <span>{t('customModel')}</span>
-                  <input
-                    className="input"
-                    value={currentModel}
-                    onChange={event => updateProviderModel(settings.aiProvider, event.target.value)}
-                    placeholder={selectedPreset.defaultModel || 'model-name'}
-                  />
-                </label>
-              </div>
-            </div>
-        )}
-
+            </label>
+          </div>
+          <div className="quick-ai-grid advanced-inline">
+            <label>
+              <span>{t('customApiUrl')}</span>
+              <input
+                className="input"
+                value={currentBaseUrl}
+                onChange={event => updateProviderBaseUrl(settings.aiProvider, event.target.value)}
+                placeholder="https://your-api.example.com/v1"
+              />
+            </label>
+            <label>
+              <span>{t('customModel')}</span>
+              <input
+                className="input"
+                value={currentModel}
+                onChange={event => updateProviderModel(settings.aiProvider, event.target.value)}
+                placeholder={selectedPreset.defaultModel || 'model-name'}
+              />
+            </label>
+          </div>
+        </div>
       </section>
 
       <section className="opt-section">
@@ -383,19 +318,29 @@ export default function OptionsApp() {
   function updateProviderBaseUrl(provider: AIProvider, baseUrl: string) {
     if (!settings) return
     const patch: Partial<UserSettings> = {
-      aiBaseUrls: { ...settings.aiBaseUrls, [provider]: baseUrl },
+      aiBaseUrls: { [provider]: baseUrl },
     }
     if (provider === 'custom') patch.customBaseUrl = baseUrl
-    handleChange(patch)
+    setSettings(prev => prev ? { ...prev, ...patch } : prev)
+    setSaveStatus('saving')
+    chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: patch })
+      .then(() => setSaveStatus('saved'))
+      .catch(() => setSaveStatus('idle'))
+    window.setTimeout(() => setSaveStatus('idle'), 1800)
   }
 
   function updateProviderModel(provider: AIProvider, model: string) {
     if (!settings) return
     const patch: Partial<UserSettings> = {
-      aiModels: { ...settings.aiModels, [provider]: model },
+      aiModels: { [provider]: model },
     }
     if (provider === 'custom') patch.customModel = model
-    handleChange(patch)
+    setSettings(prev => prev ? { ...prev, ...patch } : prev)
+    setSaveStatus('saving')
+    chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', payload: patch })
+      .then(() => setSaveStatus('saved'))
+      .catch(() => setSaveStatus('idle'))
+    window.setTimeout(() => setSaveStatus('idle'), 1800)
   }
 
   async function handleExport(format: 'json' | 'markdown' | 'html') {
@@ -428,7 +373,6 @@ export default function OptionsApp() {
       const text = await file.text()
       try {
         const bookmarks = parseImportedBookmarks(file.name, text)
-        await requestPageReadPermission()
         const res = await chrome.runtime.sendMessage({ type: 'IMPORT_BOOKMARKS', payload: bookmarks })
         if (!res.success) throw new Error(res.error)
         notify(t('importDone', res.data))
@@ -437,14 +381,6 @@ export default function OptionsApp() {
       }
     }
     input.click()
-  }
-
-  async function handleResetFreeAIUsage() {
-    const res = await chrome.runtime.sendMessage({ type: 'RESET_FREE_AI_USAGE' })
-    if (res.success) {
-      setUsage(res.data)
-      notify(t('resetFreeAIUsageDone'))
-    }
   }
 
   async function handleClearAll() {

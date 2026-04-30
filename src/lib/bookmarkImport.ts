@@ -22,7 +22,8 @@ export function parseJsonBookmarks(text: string): Bookmark[] {
   const data = JSON.parse(text)
   const list = Array.isArray(data) ? data : data.bookmarks
   if (!Array.isArray(list)) throw new Error('Invalid JSON')
-  return list.map(bookmark => normalizeImportedBookmark(bookmark as Bookmark))
+  const isBookmarkMindExport = !Array.isArray(data) && data.version && Array.isArray(data.bookmarks)
+  return list.map(bookmark => normalizeImportedBookmark(bookmark as Bookmark, isBookmarkMindExport))
 }
 
 export function parseBookmarkHtml(text: string): Bookmark[] {
@@ -80,13 +81,14 @@ function bookmarkFromAnchor(anchor: HTMLAnchorElement, folderPath: string[]): Bo
     visitCount: 0,
     status: 'sleeping',
     isArchived: false,
-  } as Bookmark)
+  } as Bookmark, false)
 }
 
-function normalizeImportedBookmark(bookmark: Bookmark): Bookmark {
+function normalizeImportedBookmark(bookmark: Bookmark, preserveKnowledgeFolder = false): Bookmark {
   const now = Date.now()
-  const isBrowserImport = Boolean(bookmark.sourceFolderPath?.length)
-  const folderPath = isBrowserImport
+  const importedSourcePath = normalizeSourceFolderPath(bookmark)
+  const shouldStageImport = !preserveKnowledgeFolder
+  const folderPath = shouldStageImport
     ? [...IMPORT_STAGING_FOLDER]
     : normalizeFolderPath(bookmark.folderPath, bookmark.category)
 
@@ -97,7 +99,7 @@ function normalizeImportedBookmark(bookmark: Bookmark): Bookmark {
     category: folderPath[0],
     subCategory: folderPath[1],
     folderPath,
-    sourceFolderPath: bookmark.sourceFolderPath?.map(part => part.trim()).filter(Boolean).slice(-6),
+    sourceFolderPath: shouldStageImport ? importedSourcePath : bookmark.sourceFolderPath?.map(part => part.trim()).filter(Boolean).slice(-6),
     tags: bookmark.tags ?? [],
     keywords: bookmark.keywords ?? [],
     aiCategorized: bookmark.aiCategorized ?? false,
@@ -108,6 +110,23 @@ function normalizeImportedBookmark(bookmark: Bookmark): Bookmark {
     status: bookmark.status ?? 'sleeping',
     isArchived: bookmark.isArchived ?? false,
   }
+}
+
+function normalizeSourceFolderPath(bookmark: Bookmark): string[] {
+  const explicitSource = bookmark.sourceFolderPath?.map(part => part.trim()).filter(Boolean) ?? []
+  if (explicitSource.length) return explicitSource.slice(-6)
+
+  const folderPath = bookmark.folderPath?.map(part => part.trim()).filter(Boolean) ?? []
+  if (folderPath.length && folderPath.join('/') !== IMPORT_STAGING_FOLDER.join('/')) {
+    return folderPath.slice(-6)
+  }
+
+  const categoryPath = [bookmark.category, bookmark.subCategory].map(part => part?.trim()).filter(Boolean) as string[]
+  if (categoryPath.length && categoryPath.join('/') !== IMPORT_STAGING_FOLDER.join('/')) {
+    return categoryPath.slice(-6)
+  }
+
+  return []
 }
 
 function normalizeFolderPath(folderPath?: string[], category?: string): string[] {

@@ -2,49 +2,133 @@
 // BookmarkMind AI · Content Script（页面内容提取）
 // ============================================================
 import type { ExtractedContent, Message } from '../types'
+import { Readability } from '@mozilla/readability'
 
 // 提取页面核心内容
-function extractPageContent(): ExtractedContent {
+async function extractPageContent(): Promise<ExtractedContent> {
+  await waitForReadablePage()
   const title = document.title || ''
   const url = location.href
 
-  // 优先取 OG description，否则取 meta description
+  // 优先取 OG description，否则取 Twitter description，最后取 meta description
   const description =
     (document.querySelector('meta[property="og:description"]') as HTMLMetaElement)?.content ||
+    (document.querySelector('meta[name="twitter:description"]') as HTMLMetaElement)?.content ||
     (document.querySelector('meta[name="description"]') as HTMLMetaElement)?.content ||
     ''
 
-  // OG 图片
+  // OG/Twitter 图片
   const ogImage =
-    (document.querySelector('meta[property="og:image"]') as HTMLMetaElement)?.content || undefined
+    (document.querySelector('meta[property="og:image"]') as HTMLMetaElement)?.content ||
+    (document.querySelector('meta[name="twitter:image"]') as HTMLMetaElement)?.content ||
+    undefined
 
-  // Favicon
+  // Favicon（多来源，优先高清图标）
   const favicon =
+    (document.querySelector('link[rel="icon"][sizes="32x32"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="icon"][sizes="96x96"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="icon"][sizes="192x192"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="apple-touch-icon"]') as HTMLLinkElement)?.href ||
     (document.querySelector('link[rel="icon"]') as HTMLLinkElement)?.href ||
     (document.querySelector('link[rel="shortcut icon"]') as HTMLLinkElement)?.href ||
     `${location.origin}/favicon.ico`
 
-  // 提取主要正文内容（去掉导航、广告等噪音）
-  const mainContent = extractMainText()
+  const readability = extractWithReadability()
+  const mainContent = readability.textContent || extractMainText()
 
-  return { title, url, description, mainContent, ogImage, favicon }
+  return {
+    title: readability.title || title,
+    url,
+    description: readability.excerpt || description,
+    mainContent,
+    ogImage,
+    favicon,
+  }
+}
+
+function extractWithReadability(): { title: string; excerpt: string; textContent: string } {
+  try {
+    const doc = document.cloneNode(true) as Document
+    const article = new Readability(doc).parse()
+    const textContent = cleanText(article?.textContent ?? '')
+    if (textContent.length >= 180) {
+      return {
+        title: cleanText(article?.title ?? ''),
+        excerpt: cleanText(article?.excerpt ?? ''),
+        textContent: textContent.slice(0, 6000),
+      }
+    }
+  } catch {
+    // Readability is best-effort; the density scorer below handles unusual pages.
+  }
+  return { title: '', excerpt: '', textContent: '' }
 }
 
 function extractMainText(): string {
-  // 优先提取 article、main 标签内容
-  const prioritySelectors = ['article', 'main', '[role="main"]', '.post-content', '.article-body']
-  for (const sel of prioritySelectors) {
-    const el = document.querySelector(sel)
-    if (el) {
-      return cleanText(el.textContent ?? '').slice(0, 3000)
+  if (!document.body) return ''
+
+  const body = document.body.cloneNode(true) as HTMLElement
+  removeNoise(body)
+
+  const candidates = Array.from(body.querySelectorAll<HTMLElement>(
+    'article, main, section, div, td, pre, blockquote, [role="main"]',
+  ))
+  let best = ''
+  let bestScore = 0
+
+  for (const element of candidates) {
+    const text = cleanText(element.textContent ?? '')
+    if (text.length < 80) continue
+
+    const linkText = Array.from(element.querySelectorAll('a'))
+      .map(link => link.textContent ?? '')
+      .join(' ')
+    const linkDensity = cleanText(linkText).length / Math.max(text.length, 1)
+    const paragraphCount = element.querySelectorAll('p, li, pre, code, h1, h2, h3').length
+    const punctuationCount = (text.match(/[。！？；：，、.!?;:,]/g) ?? []).length
+    const codeBonus = element.querySelectorAll('pre, code').length * 25
+    const noisePenalty = /nav|menu|footer|header|sidebar|comment|related|recommend|advert/i.test(element.className)
+      ? 120
+      : 0
+    const score =
+      text.length * (1 - Math.min(linkDensity, 0.85)) +
+      paragraphCount * 45 +
+      punctuationCount * 8 +
+      codeBonus -
+      noisePenalty
+
+    if (score > bestScore) {
+      bestScore = score
+      best = text
     }
   }
-  // 降级：提取 body 内容，去掉 script/style/nav/footer
-  const body = document.body.cloneNode(true) as HTMLElement
-  ;['script', 'style', 'nav', 'footer', 'header', 'aside', '.sidebar', '.ad', '.advertisement']
-    .forEach(sel => body.querySelectorAll(sel).forEach(el => el.remove()))
 
-  return cleanText(body.textContent ?? '').slice(0, 3000)
+  if (best.length >= 120) return best.slice(0, 6000)
+
+  const bodyText = cleanText(body.textContent ?? '')
+  return bodyText.length >= 80 ? bodyText.slice(0, 6000) : ''
+}
+
+function removeNoise(root: ParentNode): void {
+  const noiseSelectors = [
+    'script', 'style', 'nav', 'footer', 'header', 'aside',
+    'form', 'button', 'select', 'textarea', 'iframe', 'noscript',
+    '[aria-hidden="true"]', '[hidden]',
+    '.sidebar', '.ad', '.ads', '.advertisement', '.cookie-banner',
+    '.consent-banner', '#cookie-banner', '.popup', '.modal',
+    '.overlay', '.toast', '.notification', '.banner',
+    '.toolbar', '.menu', '.share', '.social', '.related',
+    '.recommend', '.comments', '#comments',
+  ]
+  noiseSelectors.forEach(sel => root.querySelectorAll(sel).forEach(el => el.remove()))
+}
+
+async function waitForReadablePage(): Promise<void> {
+  if (document.readyState === 'loading') {
+    await new Promise<void>(resolve => document.addEventListener('DOMContentLoaded', () => resolve(), { once: true }))
+  }
+  if (cleanText(document.body?.textContent ?? '').length >= 300) return
+  await new Promise<void>(resolve => window.setTimeout(resolve, 900))
 }
 
 function cleanText(text: string): string {
@@ -58,8 +142,9 @@ function cleanText(text: string): string {
 chrome.runtime.onMessage.addListener(
   (msg: Message, _sender, sendResponse) => {
     if (msg.type === 'EXTRACT_CONTENT') {
-      const content = extractPageContent()
-      sendResponse({ success: true, data: content })
+      extractPageContent()
+        .then(content => sendResponse({ success: true, data: content }))
+        .catch(err => sendResponse({ success: false, error: err instanceof Error ? err.message : 'EXTRACT_FAILED' }))
     }
     return true
   }

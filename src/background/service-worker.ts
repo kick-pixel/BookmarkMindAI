@@ -13,14 +13,11 @@ import {
   migrateLegacyImportedBookmarks,
   deleteBookmark,
   deleteBookmarksBulk,
-  archiveBookmark,
   getSettings,
   updateSettings,
-  resetFreeAIUsage,
   clearLocalData,
   recordVisit,
   canUseAI,
-  incrementAIUsage,
   computeStatus,
   getDomain,
   normalizeUrl,
@@ -28,20 +25,17 @@ import {
 import { generateSummary, extractKeywords } from '../lib/ai'
 import { smartClassify } from '../lib/bookmarkClassifier'
 import { recordUserCorrection } from '../lib/bookmarkClassifier/userLearning'
-import {
-  BYOK_CONFIG_REQUIRED_MESSAGE,
-  FREE_AI_QUOTA_MESSAGE,
-  FREE_AI_UNSTABLE_MESSAGE,
-  isUsingBuiltInFreeAI,
-  resolveAIConfig,
-} from '../lib/aiConfig'
+import { BYOK_CONFIG_REQUIRED_MESSAGE, resolveAIConfig } from '../lib/aiConfig'
 import type { Bookmark, Message, MessageResponse, ExtractedContent, UserSettings, ProcessingTask } from '../types'
 
 // ── AI 请求去重节流 ────────────────────────────────────────────
 const aiRequestCache = new Map<string, Promise<unknown>>()
+let autoAnalysisQueue: Promise<void> = Promise.resolve()
 const PROCESSING_TASK_KEY = 'bai_processing_task'
 const CONTEXT_MENU_SAVE_PAGE = 'bai-save-page'
 const CONTEXT_MENU_OPEN_PANEL = 'bai-open-panel'
+const AUTO_ANALYZE_DELAY_MS = 1400
+const AUTO_ANALYZE_TAB_TIMEOUT_MS = 25000
 
 function dedupAI<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const existing = aiRequestCache.get(key)
@@ -51,39 +45,11 @@ function dedupAI<T>(key: string, factory: () => Promise<T>): Promise<T> {
   return promise
 }
 
-// ── 导入并发控制 ────────────────────────────────────────────────
-const CONCURRENCY_LIMIT = 6
-
-async function runWithConcurrency<T>(
-  items: T[],
-  processor: (item: T, iondex: number) => Promise<void>,
-): Promise<void> {
-  const queue = [...items]
-  const running: Promise<void>[] = []
-  let index = 0
-
-  function next(): Promise<void> | null {
-    if (queue.length === 0) return null
-    const item = queue.shift()!
-    const currentIndex = index++
-    const task = processor(item, currentIndex).catch(err => {
-      console.error(`[BAI] Concurrency task #${currentIndex} failed:`, err)
-    })
-    running.push(task)
-    task.then(() => running.splice(running.indexOf(task), 1))
-    return task
-  }
-
-  // 启动初始批
-  for (let i = 0; i < Math.min(CONCURRENCY_LIMIT, items.length); i++) {
-    next()
-  }
-
-  // 每当一个任务完成，启动下一个
-  while (running.length > 0) {
-    await Promise.race(running)
-    if (queue.length > 0) next()
-  }
+function enqueueAutoAnalysis(factory: () => Promise<void>): void {
+  autoAnalysisQueue = autoAnalysisQueue
+    .catch(() => {})
+    .then(factory)
+    .catch(err => console.error('[BAI] Auto-analysis queue failed:', err))
 }
 
 // ── 初始化 ────────────────────────────────────────────────────
@@ -166,7 +132,7 @@ function setupContextMenus(): void {
     chrome.contextMenus.create({
       id: CONTEXT_MENU_SAVE_PAGE,
       title: chrome.i18n.getMessage('contextSavePage') || 'Save and organize this page',
-      contexts: ['page'],
+      contexts: ['all'],
     })
     chrome.contextMenus.create({
       id: CONTEXT_MENU_OPEN_PANEL,
@@ -181,14 +147,26 @@ async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
   return tab ?? null
 }
 
-async function saveTabAsBookmark(tab: chrome.tabs.Tab, notify = false): Promise<Bookmark> {
+async function saveTabAsBookmark(tab: chrome.tabs.Tab, notify = false, preferredContent?: ExtractedContent): Promise<Bookmark> {
   if (!tab.url) throw new Error('NO_ACTIVE_TAB')
-  const content = await extractContentFromTab(tab)
+  const content = preferredContent?.url ? preferredContent : await extractContentFromTab(tab)
   const bookmark = createBookmark(content)
   const saved = await saveBookmark(bookmark)
-  if (saved.id === bookmark.id) processWithAI(saved, content)
+  if (saved.id === bookmark.id || shouldAnalyzeOnCurrentPageSave(saved)) {
+    processWithAI(saved, content)
+  }
   if (notify) notifySaved()
   return saved
+}
+
+function shouldAnalyzeOnCurrentPageSave(bookmark: Bookmark): boolean {
+  return (
+    !bookmark.summary?.trim() ||
+    bookmark.aiStatus === 'pending' ||
+    bookmark.aiStatus === 'skipped' ||
+    bookmark.aiStatus === 'failed' ||
+    Boolean(bookmark.aiError)
+  )
 }
 
 async function openSidePanel(tab?: chrome.tabs.Tab): Promise<void> {
@@ -230,7 +208,7 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
     case 'SAVE_CURRENT_TAB': {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
       if (!tab?.url) return { success: false, error: 'NO_ACTIVE_TAB' }
-      const saved = await saveTabAsBookmark(tab)
+      const saved = await saveTabAsBookmark(tab, false, msg.payload as ExtractedContent | undefined)
       return { success: true, data: saved }
     }
 
@@ -269,17 +247,24 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
       bookmark.summaryGeneratedAt = undefined
       await saveBookmark(bookmark)
       chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
-      const content = await buildImportedContent(bookmark, { includeExistingSummary: false })
-      processWithAI(bookmark, content)
-      return { success: true, data: bookmark }
+      const activeTab = await getActiveTab()
+      if (activeTab?.url && normalizeUrl(activeTab.url) === normalizeUrl(bookmark.url)) {
+        const content = await extractContentFromTab(activeTab)
+        processWithAI(bookmark, content)
+        return { success: true, data: bookmark }
+      }
+      await analyzeBookmarksByOpeningTabs([bookmark.url], 'retry', { active: true, closeTabs: false })
+      const updated = (await getAllBookmarks()).find(item => item.id === bookmark.id) ?? bookmark
+      return { success: true, data: updated }
     }
 
     case 'IMPORT_BOOKMARKS': {
       const bookmarks = msg.payload as Bookmark[]
       const result = await saveBookmarksBulk(bookmarks)
       const migratedUrls = await migrateLegacyImportedBookmarks()
-      optimizeImportedBookmarks([...result.importedUrls, ...result.reprocessUrls, ...migratedUrls], 'import')
-        .catch(err => console.error('[BAI] Import optimization failed:', err))
+      enqueueAutoAnalysis(() =>
+        analyzeBookmarksByOpeningTabs([...result.importedUrls, ...result.reprocessUrls, ...migratedUrls], 'import'),
+      )
       return { success: true, data: result }
     }
 
@@ -306,8 +291,7 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
         )
         .map(bookmark => bookmark.url)
       if (!failedUrls.length) return { success: true, data: { total: 0 } }
-      optimizeImportedBookmarks(failedUrls, 'retry')
-        .catch(err => console.error('[BAI] Retry failed bookmarks failed:', err))
+      enqueueAutoAnalysis(() => analyzeBookmarksByOpeningTabs(failedUrls, 'retry'))
       return { success: true, data: { total: failedUrls.length } }
     }
 
@@ -329,11 +313,6 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
       }
     }
 
-    case 'ARCHIVE_BOOKMARK': {
-      await archiveBookmark(msg.payload as string)
-      return { success: true }
-    }
-
     case 'GET_SETTINGS': {
       const settings = await getSettings()
       return { success: true, data: settings }
@@ -346,28 +325,7 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
 
     case 'GET_USAGE': {
       const usage = await canUseAI()
-      const settings = await getSettings()
-      return {
-        success: true,
-        data: {
-          ...usage,
-          used: settings.aiUsageCount,
-          quota: settings.freeQuotaPerMonth,
-        },
-      }
-    }
-
-    case 'RESET_FREE_AI_USAGE': {
-      const settings = await resetFreeAIUsage()
-      const usage = await canUseAI()
-      return {
-        success: true,
-        data: {
-          ...usage,
-          used: settings.aiUsageCount,
-          quota: settings.freeQuotaPerMonth,
-        },
-      }
+      return { success: true, data: usage }
     }
 
     case 'CLEAR_ALL_DATA': {
@@ -379,7 +337,7 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
     case 'AI_SUMMARIZE': {
       const { bookmark, content } = msg.payload as { bookmark: Bookmark; content: ExtractedContent }
       const usage = await canUseAI()
-      if (!usage.allowed) return { success: false, error: 'QUOTA_EXCEEDED' }
+      if (!usage.allowed) return { success: false, error: BYOK_CONFIG_REQUIRED_MESSAGE }
 
       const summary = await generateSummary(content, {
         category: bookmark.category,
@@ -391,9 +349,6 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
         bookmark.summary = summary
         bookmark.summaryGeneratedAt = Date.now()
         await saveBookmark(bookmark)
-        await incrementAIUsage()
-      } else if (isUsingBuiltInFreeAI(await getSettings())) {
-        return { success: false, error: FREE_AI_UNSTABLE_MESSAGE }
       }
       return { success: true, data: { summary } }
     }
@@ -435,6 +390,16 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
 
 async function extractContentFromTab(tab: chrome.tabs.Tab): Promise<ExtractedContent> {
   if (tab.id) {
+    const response = await chrome.tabs
+      .sendMessage(tab.id, { type: 'EXTRACT_CONTENT' })
+      .catch(() => null)
+    if (response?.success && response.data) {
+      return {
+        ...response.data,
+        favicon: response.data.favicon || tab.favIconUrl,
+      }
+    }
+
     const injected = await chrome.scripting
       .executeScript({
         target: { tabId: tab.id },
@@ -446,16 +411,6 @@ async function extractContentFromTab(tab: chrome.tabs.Tab): Promise<ExtractedCon
       return {
         ...injectedContent,
         favicon: injectedContent.favicon || tab.favIconUrl,
-      }
-    }
-
-    const response = await chrome.tabs
-      .sendMessage(tab.id, { type: 'EXTRACT_CONTENT' })
-      .catch(() => null)
-    if (response?.success && response.data) {
-      return {
-        ...response.data,
-        favicon: response.data.favicon || tab.favIconUrl,
       }
     }
   }
@@ -478,26 +433,77 @@ function extractPageContentInPage(): ExtractedContent {
   }
 
   function extractMainText(): string {
-    const prioritySelectors = ['article', 'main', '[role="main"]', '.post-content', '.article-body']
-    for (const selector of prioritySelectors) {
-      const element = document.querySelector(selector)
-      if (element) return cleanText(element.textContent ?? '').slice(0, 3000)
-    }
+    if (!document.body) return ''
 
     const body = document.body.cloneNode(true) as HTMLElement
-    ;['script', 'style', 'nav', 'footer', 'header', 'aside', '.sidebar', '.ad', '.advertisement']
-      .forEach(selector => body.querySelectorAll(selector).forEach(element => element.remove()))
+    const noiseSelectors = [
+      'script', 'style', 'nav', 'footer', 'header', 'aside',
+      'form', 'button', 'select', 'textarea', 'iframe', 'noscript',
+      '[aria-hidden="true"]', '[hidden]',
+      '.sidebar', '.ad', '.ads', '.advertisement', '.cookie-banner',
+      '.consent-banner', '#cookie-banner', '.popup', '.modal',
+      '.overlay', '.toast', '.notification', '.banner',
+      '.toolbar', '.menu', '.share', '.social', '.related',
+      '.recommend', '.comments', '#comments',
+    ]
+    noiseSelectors.forEach(sel => body.querySelectorAll(sel).forEach(el => el.remove()))
 
-    return cleanText(body.textContent ?? '').slice(0, 3000)
+    const candidates = Array.from(body.querySelectorAll<HTMLElement>(
+      'article, main, section, div, td, pre, blockquote, [role="main"]',
+    ))
+    let best = ''
+    let bestScore = 0
+
+    for (const element of candidates) {
+      const text = cleanText(element.textContent ?? '')
+      if (text.length < 80) continue
+      const linkText = Array.from(element.querySelectorAll('a'))
+        .map(link => link.textContent ?? '')
+        .join(' ')
+      const linkDensity = cleanText(linkText).length / Math.max(text.length, 1)
+      const paragraphCount = element.querySelectorAll('p, li, pre, code, h1, h2, h3').length
+      const punctuationCount = (text.match(/[。！？；：，、.!?;:,]/g) ?? []).length
+      const codeBonus = element.querySelectorAll('pre, code').length * 25
+      const noisePenalty = /nav|menu|footer|header|sidebar|comment|related|recommend|advert/i.test(element.className)
+        ? 120
+        : 0
+      const score =
+        text.length * (1 - Math.min(linkDensity, 0.85)) +
+        paragraphCount * 45 +
+        punctuationCount * 8 +
+        codeBonus -
+        noisePenalty
+
+      if (score > bestScore) {
+        bestScore = score
+        best = text
+      }
+    }
+
+    if (best.length >= 120) return best.slice(0, 6000)
+    const bodyText = cleanText(body.textContent ?? '')
+    return bodyText.length >= 80 ? bodyText.slice(0, 6000) : ''
   }
 
+  // 提取描述（多来源）
   const description =
     (document.querySelector('meta[property="og:description"]') as HTMLMetaElement)?.content ||
+    (document.querySelector('meta[name="twitter:description"]') as HTMLMetaElement)?.content ||
     (document.querySelector('meta[name="description"]') as HTMLMetaElement)?.content ||
     ''
+
+  // 提取 OG 图片
   const ogImage =
-    (document.querySelector('meta[property="og:image"]') as HTMLMetaElement)?.content || undefined
+    (document.querySelector('meta[property="og:image"]') as HTMLMetaElement)?.content ||
+    (document.querySelector('meta[name="twitter:image"]') as HTMLMetaElement)?.content ||
+    undefined
+
+  // 提取 Favicon（多来源）
   const favicon =
+    (document.querySelector('link[rel="icon"][sizes="32x32"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="icon"][sizes="96x96"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="icon"][sizes="192x192"]') as HTMLLinkElement)?.href ||
+    (document.querySelector('link[rel="apple-touch-icon"]') as HTMLLinkElement)?.href ||
     (document.querySelector('link[rel="icon"]') as HTMLLinkElement)?.href ||
     (document.querySelector('link[rel="shortcut icon"]') as HTMLLinkElement)?.href ||
     `${location.origin}/favicon.ico`
@@ -512,17 +518,18 @@ function extractPageContentInPage(): ExtractedContent {
   }
 }
 
-async function optimizeImportedBookmarks(importedUrls: string[], taskType: ProcessingTask['type']): Promise<void> {
+async function analyzeBookmarksByOpeningTabs(
+  importedUrls: string[],
+  taskType: ProcessingTask['type'],
+  options: { active?: boolean; closeTabs?: boolean } = {},
+): Promise<void> {
   if (!importedUrls.length) return
-
-  const settings = await getSettings()
-  const hasAutomation =
-    settings.autoClassify || settings.autoTag || settings.autoSummary || settings.autoExtractKeywords
 
   const importedUrlSet = new Set(importedUrls.map(normalizeUrl))
   const bookmarks = await getAllBookmarks()
-  const imported = bookmarks.filter(bookmark => importedUrlSet.has(normalizeUrl(bookmark.url)))
-  const aiReady = isAIConfigured(settings)
+  const imported = bookmarks.filter(bookmark =>
+    importedUrlSet.has(normalizeUrl(bookmark.url)) && isHttpUrl(bookmark.url),
+  )
   const total = imported.length
   let processedCount = 0
   let failedCount = 0
@@ -539,7 +546,7 @@ async function optimizeImportedBookmarks(importedUrls: string[], taskType: Proce
     updatedAt: Date.now(),
   })
 
-  await runWithConcurrency(imported, async (bookmark) => {
+  for (const bookmark of imported) {
     await updateProcessingTask({
       id: taskId,
       type: taskType,
@@ -552,83 +559,23 @@ async function optimizeImportedBookmarks(importedUrls: string[], taskType: Proce
       updatedAt: Date.now(),
     })
 
-    if (!hasAutomation) {
-      await updateAIStatus(bookmark, 'skipped', 'All AI automation options are disabled')
-      processedCount++
-      await broadcastProcessingProgress(taskId, taskType, processedCount, total, failedCount)
-      return
-    }
-
     try {
-      const content = await buildImportedContent(bookmark)
-
-      if (settings.autoClassify || settings.autoTag) {
-        const classification = await smartClassify(content, { localOnly: !aiReady })
-        if (classification && classification.confidence > 0.3) {
-          if (settings.autoClassify) {
-            bookmark.category = classification.folderPath[0]
-            bookmark.subCategory = classification.folderPath[1]
-            bookmark.folderPath = classification.folderPath
-          }
-          if (settings.autoTag) {
-            bookmark.tags = classification.tags
-          }
-          bookmark.aiCategorized = true
-          bookmark.aiConfidence = classification.confidence
-          bookmark.aiReason = classification.reason
-        }
-      }
-
-      if (settings.autoSummary) {
-        const summaryUsage = aiReady ? await canUseAI() : { allowed: false }
-        if (summaryUsage.allowed) {
-          const summary = await dedupAI(`summary:${getAIRequestCacheScope(settings)}:${bookmark.url}`, () =>
-            generateSummary(content, {
-              category: bookmark.category,
-              subCategory: bookmark.subCategory,
-              tags: bookmark.tags,
-              reason: bookmark.aiReason,
-            }),
-          )
-          if (summary) {
-            bookmark.summary = summary
-            bookmark.summaryGeneratedAt = Date.now()
-            await incrementAIUsage()
-            bookmark.aiError = undefined
-          } else {
-            bookmark.aiError = isUsingBuiltInFreeAI(settings)
-              ? FREE_AI_UNSTABLE_MESSAGE
-              : 'Summary generation returned empty result'
-          }
-        } else if (!aiReady) {
-          bookmark.aiError = settings.aiServiceMode === 'byok' ? BYOK_CONFIG_REQUIRED_MESSAGE : 'AI provider is not configured'
-        } else {
-          bookmark.aiError = isUsingBuiltInFreeAI(settings)
-            ? FREE_AI_QUOTA_MESSAGE
-            : 'AI quota exceeded before summary generation'
-        }
-      }
-
-      if (settings.autoExtractKeywords) {
-        bookmark.keywords = buildLocalKeywords(content)
-      }
-
-      if (bookmark.aiError) failedCount++
-      bookmark.aiStatus = 'done'
-      bookmark.updatedAt = Date.now()
-      await saveBookmark(bookmark)
-      chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
+      const analyzed = await analyzeBookmarkInTemporaryTab(bookmark, {
+        active: options.active ?? false,
+        closeTab: options.closeTabs ?? true,
+      })
+      if (analyzed.aiStatus === 'failed' || analyzed.aiError) failedCount++
     } catch (err) {
       bookmark.aiStatus = 'failed'
-      bookmark.aiError = err instanceof Error ? err.message : 'Import optimization failed'
+      bookmark.aiError = err instanceof Error ? err.message : '自动打开页面分析失败'
+      bookmark.updatedAt = Date.now()
       failedCount++
       await saveBookmark(bookmark)
       chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
     }
-
     processedCount++
     await broadcastProcessingProgress(taskId, taskType, processedCount, total, failedCount)
-  })
+  }
 
   await updateProcessingTask({
     id: taskId,
@@ -640,6 +587,71 @@ async function optimizeImportedBookmarks(importedUrls: string[], taskType: Proce
     startedAt: Date.now(),
     updatedAt: Date.now(),
   })
+}
+
+async function analyzeBookmarkInTemporaryTab(
+  bookmark: Bookmark,
+  options: { active: boolean; closeTab: boolean },
+): Promise<Bookmark> {
+  bookmark.aiStatus = 'pending'
+  bookmark.aiError = undefined
+  await saveBookmark(bookmark)
+  chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
+
+  const tab = await chrome.tabs.create({ url: bookmark.url, active: options.active })
+  if (!tab.id) throw new Error('无法打开页面标签页')
+
+  try {
+    const loadedTab = await waitForTabComplete(tab.id)
+    await sleep(AUTO_ANALYZE_DELAY_MS)
+    const content = await extractContentFromTab(loadedTab)
+    if (!hasReadableMainContent(content)) {
+      throw new Error('页面正文未加载完成或无法读取')
+    }
+    await processWithAI(bookmark, content)
+    return bookmark
+  } finally {
+    if (options.closeTab) {
+      await chrome.tabs.remove(tab.id).catch(() => {})
+    }
+  }
+}
+
+function waitForTabComplete(tabId: number): Promise<chrome.tabs.Tab> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = globalThis.setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener)
+      reject(new Error('页面加载超时'))
+    }, AUTO_ANALYZE_TAB_TIMEOUT_MS)
+
+    const listener = (updatedTabId: number, changeInfo: { status?: string }, tab: chrome.tabs.Tab) => {
+      if (updatedTabId !== tabId || changeInfo.status !== 'complete') return
+      globalThis.clearTimeout(timeoutId)
+      chrome.tabs.onUpdated.removeListener(listener)
+      resolve(tab)
+    }
+
+    chrome.tabs.onUpdated.addListener(listener)
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === 'complete') {
+        globalThis.clearTimeout(timeoutId)
+        chrome.tabs.onUpdated.removeListener(listener)
+        resolve(tab)
+      }
+    }).catch(err => {
+      globalThis.clearTimeout(timeoutId)
+      chrome.tabs.onUpdated.removeListener(listener)
+      reject(err)
+    })
+  })
+}
+
+function isHttpUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => globalThis.setTimeout(resolve, ms))
 }
 
 async function getProcessingTask(): Promise<ProcessingTask | null> {
@@ -674,111 +686,16 @@ async function broadcastProcessingProgress(
   })
 }
 
-async function buildImportedContent(
-  bookmark: Bookmark,
-  options: { includeExistingSummary?: boolean } = {},
-): Promise<ExtractedContent> {
-  const fetched = await fetchTextPreview(bookmark.url).catch(() => '')
-  const includeExistingSummary = options.includeExistingSummary ?? true
-  return {
-    title: bookmark.title,
-    url: bookmark.url,
-    description: [
-      bookmark.domain,
-      bookmark.sourceFolderPath?.length ? `原收藏夹目录：${bookmark.sourceFolderPath.join('/')}` : '',
-      bookmark.folderPath?.length ? `当前目录：${bookmark.folderPath.join('/')}` : '',
-      bookmark.tags.join(', '),
-      bookmark.note,
-    ].filter(Boolean).join('\n'),
-    mainContent: fetched || (includeExistingSummary ? bookmark.summary : '') || '',
-    favicon: bookmark.favicon,
-  }
-}
-
-function buildLocalKeywords(content: ExtractedContent): string[] {
-  return [
-    content.title,
-    content.description,
-    content.url,
-  ]
-    .join(' ')
-    .split(/[\s,，。！？|｜:：\-_/]+/)
-    .map(keyword => keyword.trim())
-    .filter(keyword => keyword.length >= 2)
-    .slice(0, 8)
-}
-
-function isAIConfigured(settings: UserSettings): boolean {
-  return Boolean(resolveAIConfig(settings))
-}
-
 function getAIRequestCacheScope(settings: UserSettings): string {
   const config = resolveAIConfig(settings)
-  if (!config) return `${settings.aiServiceMode}:${settings.aiProvider}:unconfigured`
-  return `${settings.aiServiceMode}:${config.provider}:${config.baseUrl ?? ''}:${config.model ?? ''}`
+  if (!config) return `unconfigured:${settings.aiProvider}`
+  return `${config.provider}:${config.baseUrl ?? ''}:${config.model ?? ''}`
 }
 
-async function fetchTextPreview(url: string): Promise<string> {
-  for (const candidate of getTextPreviewUrls(url)) {
-    const controller = new AbortController()
-    const timeoutId = globalThis.setTimeout(() => controller.abort(), 6000)
-    try {
-      const response = await fetch(candidate, { signal: controller.signal })
-      if (!response.ok) continue
-
-      const contentType = response.headers.get('content-type') ?? ''
-      const text = await response.text()
-      const preview = extractTextPreview(text, contentType)
-      if (preview) return preview
-    } catch {
-      // Try the next candidate URL. Imported bookmarks should degrade gracefully.
-    } finally {
-      globalThis.clearTimeout(timeoutId)
-    }
-  }
-  return ''
-}
-
-function getTextPreviewUrls(url: string): string[] {
-  const githubRawUrl = toGithubRawUrl(url)
-  return githubRawUrl ? [githubRawUrl, url] : [url]
-}
-
-function toGithubRawUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url)
-    if (parsed.hostname !== 'github.com') return null
-    const parts = parsed.pathname.split('/').filter(Boolean)
-    const blobIndex = parts.indexOf('blob')
-    if (parts.length < 5 || blobIndex !== 2) return null
-    const [owner, repo, , branch, ...filePath] = parts
-    if (!owner || !repo || !branch || !filePath.length) return null
-    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath.join('/')}`
-  } catch {
-    return null
-  }
-}
-
-function extractTextPreview(text: string, contentType: string): string {
-  const normalizedType = contentType.toLowerCase()
-  if (
-    normalizedType.includes('text/plain') ||
-    normalizedType.includes('text/markdown') ||
-    normalizedType.includes('application/json') ||
-    normalizedType.includes('application/octet-stream')
-  ) {
-    return text.replace(/\s+/g, ' ').trim().slice(0, 1800)
-  }
-
-  if (!normalizedType.includes('text/html')) return ''
-
-  return text
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 1800)
+function hasReadableMainContent(content: ExtractedContent): boolean {
+  const text = content.mainContent?.trim() ?? ''
+  const punctuationCount = (text.match(/[。！？；：，、.!?;:,]/g) ?? []).length
+  return text.length >= 180 && punctuationCount >= 4
 }
 
 // ── 创建书签对象 ─────────────────────────────────────────────
@@ -817,7 +734,7 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
 
   const usage = await canUseAI()
   if (!usage.allowed) {
-    await updateAIStatus(bookmark, 'skipped', settings.aiServiceMode === 'byok' ? BYOK_CONFIG_REQUIRED_MESSAGE : FREE_AI_QUOTA_MESSAGE)
+    await updateAIStatus(bookmark, 'skipped', BYOK_CONFIG_REQUIRED_MESSAGE)
     return
   }
 
@@ -842,8 +759,7 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
 
     // 2. 摘要（去重节流）
     if (settings.autoSummary) {
-      const usageNow = await canUseAI()
-      if (usageNow.allowed) {
+      if (hasReadableMainContent(content)) {
         const summary = await dedupAI(`summary:${getAIRequestCacheScope(settings)}:${content.url}`, () =>
           generateSummary(content, {
             category: bookmark.category,
@@ -855,14 +771,9 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
         if (summary) {
           bookmark.summary = summary
           bookmark.summaryGeneratedAt = Date.now()
-          await incrementAIUsage()
-        } else if (isUsingBuiltInFreeAI(settings)) {
-          bookmark.aiError = FREE_AI_UNSTABLE_MESSAGE
-        } else if (settings.aiServiceMode === 'byok') {
-          bookmark.aiError = BYOK_CONFIG_REQUIRED_MESSAGE
         }
-      } else if (settings.aiServiceMode === 'byok') {
-        bookmark.aiError = BYOK_CONFIG_REQUIRED_MESSAGE
+      } else {
+        bookmark.aiError = '当前没有可摘要的页面正文。纯前端模式只处理已打开并完成渲染的页面。'
       }
     }
 
@@ -872,16 +783,14 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
     }
 
     bookmark.aiStatus = 'done'
-    if (!bookmark.aiError) bookmark.aiError = undefined
+    if (bookmark.summary) bookmark.aiError = undefined
     await saveBookmark(bookmark)
 
     // 通知 Popup/SidePanel 更新
     chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
   } catch (err) {
     bookmark.aiStatus = 'failed'
-    bookmark.aiError = isUsingBuiltInFreeAI(settings)
-      ? FREE_AI_UNSTABLE_MESSAGE
-      : err instanceof Error ? err.message : 'AI processing failed'
+    bookmark.aiError = err instanceof Error ? err.message : 'AI processing failed'
     await saveBookmark(bookmark)
     chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
     console.error('[BAI] AI processing failed:', err)

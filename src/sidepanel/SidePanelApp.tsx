@@ -97,13 +97,6 @@ function getFolderChildren(categories: Category[], rootName: string): string[] {
   return [...new Set([...taxonomyChildren, ...userChildren])]
 }
 
-async function requestPageReadPermission(): Promise<boolean> {
-  const permissions = { origins: ['<all_urls>'] }
-  const hasPermission = await chrome.permissions.contains(permissions).catch(() => false)
-  if (hasPermission) return true
-  return chrome.permissions.request(permissions).catch(() => false)
-}
-
 export default function SidePanelApp() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -134,6 +127,15 @@ export default function SidePanelApp() {
   }
 
   useEffect(() => {
+    async function refreshLibrary() {
+      const [bmRes, catRes] = await Promise.all([
+        chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
+        chrome.runtime.sendMessage({ type: 'GET_CATEGORIES' }),
+      ])
+      if (bmRes.success) setBookmarks(bmRes.data.filter((bookmark: Bookmark) => !bookmark.isArchived))
+      if (catRes.success) setCategories(catRes.data)
+    }
+
     async function loadData() {
       const [bmRes, catRes, settingsRes, taskRes] = await Promise.all([
         chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
@@ -152,17 +154,29 @@ export default function SidePanelApp() {
     const handler = (msg: { type: string; payload: Bookmark | ProcessingTask }) => {
       if (msg.type === 'BOOKMARK_UPDATED') {
         const bookmark = msg.payload as Bookmark
-        setBookmarks(prev => prev.map(b => b.id === bookmark.id ? bookmark : b))
+        setBookmarks(prev => {
+          if (bookmark.isArchived) return prev.filter(item => item.id !== bookmark.id)
+          const exists = prev.some(item => item.id === bookmark.id)
+          if (exists) return prev.map(item => item.id === bookmark.id ? bookmark : item)
+          return [bookmark, ...prev]
+        })
         if (bookmark.aiStatus !== 'pending') {
           setReprocessingIds(prev => {
             const next = new Set(prev)
             next.delete(bookmark.id)
             return next
           })
+          chrome.runtime.sendMessage({ type: 'GET_CATEGORIES' })
+            .then(res => { if (res.success) setCategories(res.data) })
+            .catch(() => {})
         }
       }
       if (msg.type === 'PROCESSING_TASK_UPDATED') {
-        setProcessingTask(msg.payload as ProcessingTask)
+        const task = msg.payload as ProcessingTask
+        setProcessingTask(task)
+        if (task.status === 'completed' || task.status === 'failed') {
+          void refreshLibrary()
+        }
       }
     }
     chrome.runtime.onMessage.addListener(handler)
@@ -368,12 +382,6 @@ export default function SidePanelApp() {
     setBookmarks(prev => prev.filter(b => b.id !== id))
   }, [t])
 
-  const handleArchive = useCallback(async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    await chrome.runtime.sendMessage({ type: 'ARCHIVE_BOOKMARK', payload: id })
-    setBookmarks(prev => prev.filter(b => b.id !== id))
-  }, [])
-
   const handleOpen = useCallback((url: string) => {
     chrome.tabs.create({ url })
   }, [])
@@ -394,7 +402,6 @@ export default function SidePanelApp() {
       if (!file) return
       const text = await file.text()
       const imported = parseImportedBookmarks(file.name, text)
-      await requestPageReadPermission()
       const res = await chrome.runtime.sendMessage({ type: 'IMPORT_BOOKMARKS', payload: imported })
       if (res.success) {
         const [bmRes, catRes] = await Promise.all([
@@ -709,7 +716,6 @@ export default function SidePanelApp() {
                 editing={editingId === bm.id}
                 onOpen={handleOpen}
                 onEdit={setEditingId}
-                onArchive={handleArchive}
                 onDelete={handleDelete}
                 onUpdate={handleUpdateBookmark}
                 onReprocess={handleReprocess}
@@ -749,7 +755,9 @@ function ProcessingTaskCard({
           <span>
             {isRunning
               ? t('processingRunning', { processed: task.processed, total: task.total })
-              : t('processingFailed', { failed: task.failed })}
+              : task.failed > 0
+                ? t('processingFailed', { failed: task.failed })
+                : t('processingCompleted', { processed: task.processed })}
           </span>
         </div>
         <div className="processing-task-meta">
@@ -837,13 +845,34 @@ function highlightText(text: string, query?: string): React.ReactNode {
   )
 }
 
+function getVisibleTags(bookmark: Bookmark): string[] {
+  const folderParts = new Set(getFolderPath(bookmark))
+  const title = bookmark.title.toLowerCase()
+  const host = (() => {
+    try {
+      return new URL(bookmark.url).hostname.replace(/^www\./, '').toLowerCase()
+    } catch {
+      return bookmark.domain?.toLowerCase() ?? ''
+    }
+  })()
+
+  return [...new Set(bookmark.tags.map(tag => tag.trim()).filter(Boolean))]
+    .filter(tag => {
+      const lower = tag.toLowerCase()
+      if (folderParts.has(tag)) return false
+      if (lower === host || lower === bookmark.domain?.toLowerCase()) return false
+      if (tag.length > 18 && title.includes(lower)) return false
+      return true
+    })
+    .slice(0, 3)
+}
+
 function BookmarkCard({
   bookmark: bm,
   categories,
   editing,
   onOpen,
   onEdit,
-  onArchive,
   onDelete,
   onUpdate,
   onReprocess,
@@ -857,7 +886,6 @@ function BookmarkCard({
   editing: boolean
   onOpen: (url: string) => void
   onEdit: (id: string | null) => void
-  onArchive: (id: string, e: React.MouseEvent) => void
   onDelete: (id: string, e: React.MouseEvent) => void
   onUpdate: (id: string, patch: Partial<Bookmark>) => void
   onReprocess: (id: string, e: React.MouseEvent) => void
@@ -867,6 +895,7 @@ function BookmarkCard({
   searchQuery?: string
 }) {
   const initialFolderPath = getFolderPath(bm)
+  const visibleTags = getVisibleTags(bm)
   const [draftCategory, setDraftCategory] = useState(initialFolderPath[0])
   const [draftSubCategory, setDraftSubCategory] = useState(initialFolderPath[1] ?? '')
   const [draftTags, setDraftTags] = useState(bm.tags.join(', '))
@@ -922,9 +951,6 @@ function BookmarkCard({
             onClick={e => onReprocess(bm.id, e)}
           >
             {isAnalyzing ? <><div className="spinner mini-spinner" /> AI</> : 'AI'}
-          </button>
-          <button className="bm-action-btn" title={t('archive')} onClick={e => onArchive(bm.id, e)}>
-            {t('archive')}
           </button>
           <button className="bm-action-btn danger" title={t('delete')} onClick={e => onDelete(bm.id, e)}>
             {t('delete')}
@@ -997,7 +1023,7 @@ function BookmarkCard({
           style={{ background: bm.status === 'active' ? 'var(--success)' : bm.status === 'idle' ? 'var(--warning)' : 'var(--text-muted)' }}
         />
         <span className="badge badge-purple">{highlightText(getFolderLabel(bm), searchQuery)}</span>
-        {bm.tags.length ? bm.tags.slice(0, 5).map(tag => (
+        {visibleTags.length ? visibleTags.map(tag => (
           <span key={tag} className="bm-tag">#<span>{highlightText(tag, searchQuery)}</span></span>
         )) : (
           <button

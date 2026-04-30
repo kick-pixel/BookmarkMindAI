@@ -4,7 +4,7 @@
 import type { Bookmark, Category, UserSettings } from '../types'
 import { BOOKMARK_TAXONOMY, getAllFolderPaths } from './bookmarkTaxonomy'
 import { IMPORT_STAGING_FOLDER } from './bookmarkImport'
-import { isUsingBuiltInFreeAI, resolveAIConfig } from './aiConfig'
+import { resolveAIConfig } from './aiConfig'
 import {
   clearBookmarkRecords,
   getAllBookmarkRecords,
@@ -33,7 +33,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   aiProvider: 'nvidia',
   apiKeys: {},
   aiEnabled: true,
-  aiServiceMode: 'hosted',
   autoClassify: true,
   autoTag: true,
   autoSummary: true,
@@ -42,10 +41,6 @@ export const DEFAULT_SETTINGS: UserSettings = {
   cleanupReminder: true,
   cleanupReminderDays: 90,
   sendContentToAI: true,
-  plan: 'free',
-  aiUsageCount: 0,
-  aiUsageResetAt: Date.now(),
-  freeQuotaPerMonth: 100,
   language: 'auto',
   aiBaseUrls: {},
   aiModels: {},
@@ -233,14 +228,6 @@ export async function deleteBookmarksBulk(ids: string[]): Promise<Bookmark[]> {
   if (!ids.length) return getAllBookmarks()
   await migrateBookmarksToIndexedDB()
   return markBookmarkRecordsDeleted(ids)
-}
-
-export async function archiveBookmark(id: string): Promise<void> {
-  const bookmark = await getBookmarkById(id)
-  if (bookmark) {
-    bookmark.isArchived = true
-    await saveBookmark(bookmark)
-  }
 }
 
 export async function recordVisit(url: string): Promise<void> {
@@ -462,23 +449,26 @@ function ensureCategoryEntries(categories: Category[], folderPath: string[]): vo
 // ── 设置 ────────────────────────────────────────────────────
 export async function getSettings(): Promise<UserSettings> {
   const result = await chrome.storage.local.get(KEYS.SETTINGS)
-  const settings = {
+  return {
     ...DEFAULT_SETTINGS,
     ...((result[KEYS.SETTINGS] as Partial<UserSettings> | undefined) ?? {}),
     aiEnabled: true,
     ...CORE_AI_AUTOMATION_SETTINGS,
   }
-  return {
-    ...settings,
-    aiServiceMode: settings.aiServiceMode ?? 'hosted',
-  }
 }
 
 export async function updateSettings(partial: Partial<UserSettings>): Promise<UserSettings> {
   const settings = await getSettings()
+  // 对 map 类型字段做深度合并，避免部分更新丢失其他条目
+  const mergedApiKeys = { ...settings.apiKeys, ...partial.apiKeys }
+  const mergedAiBaseUrls = { ...settings.aiBaseUrls, ...partial.aiBaseUrls }
+  const mergedAiModels = { ...settings.aiModels, ...partial.aiModels }
   const updated = {
     ...settings,
     ...partial,
+    apiKeys: mergedApiKeys,
+    aiBaseUrls: mergedAiBaseUrls,
+    aiModels: mergedAiModels,
     aiEnabled: true,
     ...CORE_AI_AUTOMATION_SETTINGS,
   }
@@ -487,44 +477,9 @@ export async function updateSettings(partial: Partial<UserSettings>): Promise<Us
 }
 
 // ── AI 用量管理 ───────────────────────────────────────────────
-export async function canUseAI(): Promise<{ allowed: boolean; remaining: number; isPro: boolean }> {
+export async function canUseAI(): Promise<{ allowed: boolean }> {
   const settings = await getSettings()
-
-  if (settings.aiServiceMode === 'byok') {
-    return {
-      allowed: Boolean(resolveAIConfig(settings)),
-      remaining: Infinity,
-      isPro: settings.plan === 'pro',
-    }
-  }
-
-  if (settings.plan === 'pro') {
-    return { allowed: true, remaining: Infinity, isPro: true }
-  }
-
-  // 检查是否需要重置月度用量（每月 1 日重置）
-  const now = new Date()
-  const resetDate = new Date(settings.aiUsageResetAt)
-  const needsReset =
-    now.getMonth() !== resetDate.getMonth() || now.getFullYear() !== resetDate.getFullYear()
-
-  if (needsReset) {
-    await updateSettings({ aiUsageCount: 0, aiUsageResetAt: Date.now() })
-    return { allowed: true, remaining: settings.freeQuotaPerMonth, isPro: false }
-  }
-
-  const remaining = settings.freeQuotaPerMonth - settings.aiUsageCount
-  return { allowed: remaining > 0, remaining, isPro: false }
-}
-
-export async function incrementAIUsage(): Promise<void> {
-  const settings = await getSettings()
-  if (!isUsingBuiltInFreeAI(settings)) return
-  await updateSettings({ aiUsageCount: settings.aiUsageCount + 1 })
-}
-
-export async function resetFreeAIUsage(): Promise<UserSettings> {
-  return updateSettings({ aiUsageCount: 0, aiUsageResetAt: Date.now() })
+  return { allowed: Boolean(resolveAIConfig(settings)) }
 }
 
 // ── 初始化 ────────────────────────────────────────────────────

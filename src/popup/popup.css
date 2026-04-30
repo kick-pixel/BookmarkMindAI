@@ -195,36 +195,6 @@ body {
   line-height: 1.4;
 }
 
-.usage-bar {
-  margin: 0 14px 12px;
-  padding: 9px 11px;
-  background: rgba(151, 203, 255, 0.05);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.usage-bar-track {
-  flex: 1;
-  height: 5px;
-  background: rgba(151, 203, 255, 0.08);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.usage-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-light));
-  border-radius: 99px;
-  transition: width 0.5s ease;
-}
-
-.usage-bar-fill.near-limit {
-  background: linear-gradient(90deg, var(--warning), var(--danger));
-}
-
 .recent-section {
   flex: 1;
   padding: 0 14px;

@@ -7,6 +7,7 @@ import type { DomainMatchResult } from './domainEngine'
 import type { RuleResult } from './ruleEngine'
 import { matchDomain } from './domainEngine'
 import { matchByRules } from './ruleEngine'
+import { detectContentType } from './contentTypeDetector'
 import type { ClassifyResult } from '../ai'
 
 export interface EnsembleInput {
@@ -33,9 +34,9 @@ export interface EnsembleOutput {
 const WEIGHTS = {
   domainMap: 0.40,        // 域名映射 (高精度, 覆盖面窄)
   urlStructure: 0.15,     // URL 结构 (中等精度)
-  keywordGroup: 0.25,     // 关键词组 (中等精度)
+  keywordGroup: 0.20,     // 关键词组 (中等精度)
   contentType: 0.10,      // 内容类型 (低精度)
-  aiPrompt: 0.35,         // AI 分类 (高精度但需扣除 0.1 偏见调节)
+  aiPrompt: 0.45,         // AI 分类 (高精度，配置了 AI 时赋予更高权重)
 }
 
 /**
@@ -47,6 +48,10 @@ export function ensembleClassify(
 ): EnsembleOutput {
   const domainResult = matchDomain(input.url)
   const ruleResults = matchByRules(input)
+  const contentType = detectContentType(input.title, input.description, input.url)
+
+  const newsPriority = getNewsPriorityResult(input, domainResult, contentType.type, contentType.confidence)
+  if (newsPriority) return newsPriority
 
   const contributions: EnsembleOutput['contributions'] = []
 
@@ -148,10 +153,61 @@ export function ensembleClassify(
     folderPath,
     confidence,
     reason: `融合 ${contributions.length} 个引擎: ${bestData.reasons.join('; ')}`,
-    tags: bestData.tags.length ? bestData.tags.slice(0, 5) : generateFallbackTags(input, folderPath),
+    tags: bestData.tags.length ? bestData.tags.slice(0, 3) : generateFallbackTags(input, folderPath),
     source,
     contributions,
   }
+}
+
+function getNewsPriorityResult(
+  input: Pick<ExtractedContent, 'title' | 'url' | 'description' | 'mainContent'>,
+  domainResult: DomainMatchResult | null,
+  contentType: string,
+  contentTypeConfidence: number,
+): EnsembleOutput | null {
+  const isNewsDomain = domainResult?.folderPath[0] === '资讯动态'
+  const isNewsArticle = contentType === 'news-article'
+  if (!isNewsDomain && !isNewsArticle) return null
+  if (looksLikeDeveloperResource(input)) return null
+
+  const folderPath: [string, string] = domainResult?.folderPath[0] === '资讯动态'
+    ? domainResult.folderPath
+    : ['资讯动态', '科技新闻']
+  const confidence = Math.max(domainResult?.confidence ?? 0, contentTypeConfidence, 0.78)
+  const contributions: EnsembleOutput['contributions'] = []
+
+  if (domainResult) {
+    contributions.push({
+      source: 'domain-map',
+      folderPath: domainResult.folderPath.join('/'),
+      confidence: domainResult.confidence,
+      weight: WEIGHTS.domainMap,
+    })
+  }
+  if (isNewsArticle) {
+    contributions.push({
+      source: 'rule-content-type',
+      folderPath: '资讯动态/科技新闻',
+      confidence: contentTypeConfidence,
+      weight: WEIGHTS.contentType,
+    })
+  }
+
+  return {
+    folderPath,
+    confidence: Math.min(confidence + 0.03, 0.99),
+    reason: `新闻页面优先: ${isNewsDomain ? `域名 ${domainResult?.matchedDomain} 属于资讯动态` : '内容类型识别为新闻文章'}，技术词仅作为新闻主题标签处理`,
+    tags: generateFallbackTags(input, folderPath),
+    source: isNewsDomain ? 'domain-map' : 'rule-engine',
+    contributions,
+  }
+}
+
+function looksLikeDeveloperResource(
+  input: Pick<ExtractedContent, 'title' | 'url' | 'description' | 'mainContent'>,
+): boolean {
+  const text = `${input.title}\n${input.description}\n${input.url}`.toLowerCase()
+  return /github\.com\/[\w.-]+\/[\w.-]+|\/docs?\b|\/api\b|\/reference\b|documentation|api reference|sdk documentation|教程|实战|入门|指南|文档|开源项目|github 仓库/i.test(text)
 }
 
 const RULE_SOURCE_WEIGHTS: Record<string, number> = {
@@ -171,7 +227,7 @@ function generateFallbackTags(input: Pick<ExtractedContent, 'title' | 'url' | 'd
     const hostname = new URL(input.url).hostname.replace(/^www\./, '')
     tags.push(hostname)
   } catch { /* skip */ }
-  return [...new Set(tags)].slice(0, 5)
+  return [...new Set(tags)].slice(0, 3)
 }
 
 function createFallback(title: string): EnsembleOutput {

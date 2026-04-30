@@ -37,8 +37,9 @@ export async function smartClassify(
   // Stage 1 + 2 + 3: 本地引擎并行执行
   const domainResult = matchDomain(content.url)
 
-  // 高置信度短路：域名匹配 ≥ 0.90 直接返回
-  if (domainResult && domainResult.confidence >= 0.90) {
+  // 高置信度短路：仅在 localOnly 模式（AI 不可用）下，域名匹配 ≥ 0.90 直接返回
+  // 当 AI 可用时，继续走融合流程让 AI 参与判断
+  if (localOnly && domainResult && domainResult.confidence >= 0.90) {
     const tags = generateTagsFromDomain(content, domainResult)
     return {
       folderPath: domainResult.folderPath,
@@ -75,7 +76,7 @@ export async function smartClassify(
     }
   }
 
-  // Stage 4a: AI 分类 (如果需要)
+  // Stage 4a: AI 分类 (始终调用，除非 localOnly)
   let aiResult: ClassifyResult | null = null
   if (!localOnly) {
     aiResult = await classifyBookmarkAI(content).catch(() => null)
@@ -104,7 +105,7 @@ function generateTagsFromDomain(
     .slice(0, 2)
 
   tags.push(...titleWords)
-  return [...new Set(tags)].slice(0, 5)
+  return [...new Set(tags)].slice(0, 3)
 }
 
 /**

@@ -4,20 +4,11 @@ import type { Bookmark, ExtractedContent, UserSettings } from '../types'
 
 const SHOW_UPGRADE_LINKS = false
 
-interface UsageInfo {
-  allowed: boolean
-  remaining: number
-  used: number
-  quota: number
-  isPro: boolean
-}
-
 export default function PopupApp() {
   const [tab, setTab] = useState<chrome.tabs.Tab | null>(null)
   const [recentBookmarks, setRecentBookmarks] = useState<Bookmark[]>([])
   const [isSaved, setIsSaved] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [usage, setUsage] = useState<UsageInfo | null>(null)
   const [settings, setSettings] = useState<UserSettings | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -27,9 +18,8 @@ export default function PopupApp() {
       const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true })
       setTab(currentTab)
 
-      const [bmRes, usageRes, settingsRes] = await Promise.all([
+      const [bmRes, settingsRes] = await Promise.all([
         chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
-        chrome.runtime.sendMessage({ type: 'GET_USAGE' }),
         chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }),
       ])
 
@@ -43,7 +33,6 @@ export default function PopupApp() {
         }
       }
 
-      if (usageRes.success) setUsage(usageRes.data)
       if (settingsRes.success) setSettings(settingsRes.data)
       setLoading(false)
     }
@@ -72,8 +61,7 @@ export default function PopupApp() {
         }
       }
 
-      void content
-      const res = await chrome.runtime.sendMessage({ type: 'SAVE_CURRENT_TAB' })
+      const res = await chrome.runtime.sendMessage({ type: 'SAVE_CURRENT_TAB', payload: content })
       if (res.success) {
         setIsSaved(true)
         setRecentBookmarks(prev => [res.data, ...prev].slice(0, 5))
@@ -92,8 +80,6 @@ export default function PopupApp() {
   }, [tab])
 
   // ── 工具函数 ─────────────────────────────────────────────────
-  const usagePercent = usage ? Math.min((usage.used / usage.quota) * 100, 100) : 0
-  const nearLimit = usagePercent >= 80
   const { t } = createTranslator(settings?.language)
   const aiConfigured = Boolean(settings?.aiEnabled)
 
@@ -169,30 +155,6 @@ export default function PopupApp() {
           <button className="btn btn-primary btn-sm" onClick={() => chrome.runtime.openOptionsPage()}>
             {t('setupNow')}
           </button>
-        </div>
-      )}
-
-      {/* AI 用量条 */}
-      {usage && settings?.aiServiceMode === 'hosted' && !usage.isPro && (
-        <div className="usage-bar">
-          <span className="text-xs" style={{ color: nearLimit ? 'var(--warning)' : 'var(--text-muted)' }}>
-            {t('aiQuota')}
-          </span>
-          <div className="usage-bar-track">
-            <div
-              className={`usage-bar-fill ${nearLimit ? 'near-limit' : ''}`}
-              style={{ width: `${usagePercent}%` }}
-            />
-          </div>
-          <span className="text-xs" style={{ color: nearLimit ? 'var(--warning)' : 'var(--text-muted)', minWidth: 40 }}>
-            {usage.used}/{usage.quota}
-          </span>
-          {nearLimit && SHOW_UPGRADE_LINKS && (
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => chrome.tabs.create({ url: 'https://bookmarksai.app/upgrade' })}
-            >{t('upgrade')}</button>
-          )}
         </div>
       )}
 

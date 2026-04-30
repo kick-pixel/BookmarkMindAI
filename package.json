@@ -11,6 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@types/mozilla__readability": "^0.4.2",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },

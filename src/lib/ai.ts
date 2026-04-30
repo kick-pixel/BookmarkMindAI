@@ -8,7 +8,7 @@ import { resolveAIConfig } from './aiConfig'
 import { getSettings } from './storage'
 import { buildClassifySystemPrompt, buildClassifyUserContent } from './bookmarkClassifier/promptBuilder'
 
-// ── 核心 Chat 调用 ────────────────────────────────────────────
+// ── 核心 Chat 调用（带重试）────────────────────────────────────
 async function chatCompletion(
   config: AIConfig,
   systemPrompt: string,
@@ -18,34 +18,81 @@ async function chatCompletion(
   const preset = getProviderPreset(config.provider)
   const baseUrl = (config.baseUrl ?? preset.baseUrl).replace(/\/$/, '')
   const model = config.model ?? preset.defaultModel
-  const controller = new AbortController()
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), 30000)
+  const MAX_RETRIES = 3
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    signal: controller.signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.3,
-    }),
-  }).finally(() => globalThis.clearTimeout(timeoutId))
+  let lastError: Error | null = null
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const result = await tryChatCompletion(baseUrl, model, config.apiKey, systemPrompt, userContent, maxTokens)
+    if (result.ok) return result.content
+    lastError = result.error
 
-  if (!response.ok) {
-    const err = await response.text()
-    throw new Error(`AI API Error ${response.status}: ${err}`)
+    // 只对临时性错误重试：429(限流), 5xx(服务端错误), timeout
+    const shouldRetry = result.isRetryable && attempt < MAX_RETRIES
+    if (!shouldRetry) break
+
+    // 指数退避：500ms, 1s, 2s
+    const delayMs = 500 * Math.pow(2, attempt - 1)
+    await sleep(delayMs)
   }
 
-  const data = await response.json()
-  return data.choices?.[0]?.message?.content ?? ''
+  throw lastError ?? new Error('AI API request failed after retries')
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => globalThis.setTimeout(resolve, ms))
+}
+
+async function tryChatCompletion(
+  baseUrl: string,
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userContent: string,
+  maxTokens: number,
+): Promise<{ ok: true; content: string } | { ok: false; error: Error; isRetryable: boolean }> {
+  const controller = new AbortController()
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), 60000)
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.3,
+      }),
+    })
+
+    if (!response.ok) {
+      const errText = await response.text()
+      const status = response.status
+      const isRetryable = status === 429 || status >= 500
+      const error = new Error(`AI API Error ${status}: ${errText}`)
+      return { ok: false, error, isRetryable }
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content ?? ''
+    if (!content) {
+      return { ok: false, error: new Error('AI returned empty response'), isRetryable: true }
+    }
+    return { ok: true, content }
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err))
+    const isRetryable = error.name === 'AbortError' || error.message.includes('network')
+    return { ok: false, error, isRetryable }
+  } finally {
+    globalThis.clearTimeout(timeoutId)
+  }
 }
 
 // ── 获取当前 AI 配置 ─────────────────────────────────────────
@@ -104,7 +151,7 @@ export async function classifyBookmark(content: ExtractedContent, options?: { lo
   const userContent = buildClassifyUserContent(content.title, content.url, content.description, pageContent)
 
   try {
-    const raw = await chatCompletion(config, systemPrompt, userContent, 260)
+    const raw = await chatCompletion(config, systemPrompt, userContent, 420)
     const jsonStr = raw.match(/\{[\s\S]*\}/)?.[0] ?? raw
     return normalizeClassification(JSON.parse(jsonStr) as ClassifyResult)
   } catch {
@@ -120,7 +167,7 @@ function normalizeClassification(result: ClassifyResult): ClassifyResult {
     folderPath,
     category: folderPath[0],
     subCategory: folderPath[1],
-    tags: [...new Set((result.tags ?? []).map(tag => tag.trim()).filter(Boolean))].slice(0, 5),
+    tags: [...new Set((result.tags ?? []).map(tag => tag.trim()).filter(Boolean))].slice(0, 3),
     confidence: Number.isFinite(result.confidence) ? result.confidence : 0.6,
   }
 }
@@ -150,21 +197,74 @@ function getFolderSeedTags(folderPath: string[]): string[] {
 }
 
 // ── 功能 2：摘要生成 ─────────────────────────────────────────
-function buildSummarySystemPrompt(category?: string, subCategory?: string): string {
+function buildSummarySystemPrompt(
+  category?: string,
+  subCategory?: string,
+  tags?: string[],
+): string {
   const categoryHint = category
     ? `\n注意：该网页的所属分类为「${category}${subCategory ? `/${subCategory}` : ''}」，这是理解网页内容的重要上下文。请不要偏离此分类范围生成摘要。`
     : ''
 
-  return `你是一个专业的网页内容摘要助手。用简洁的中文生成150-180字的内容摘要。${categoryHint}
-要求：
-1. 提炼核心观点和关键信息
-2. 突出实用价值（适合什么人看、能解决什么问题）
-3. 如有重要数据或结论请保留
-4. 语言简洁流畅，避免废话
-5. 务必根据提供的正文内容进行摘要，不要被多义词误导，要结合页面 URL 和分类领域判断
-6. ⚠️ 如果正文内容为空或仅有域名/路径信息，说明页面内容不可获取（如需要登录），此时如实说明"页面内容需登录后查看，无法生成详细摘要"，不要自行编造内容
-7. 对品牌多义词保持谨慎：如果 URL 属于 colosseum.org 或 arena.colosseum.org，Colosseum 指 Web3/Solana 生态平台，不是罗马斗兽场
-直接输出摘要文本，不要任何标签或格式。`
+  const tagsHint = tags?.length
+    ? `\n相关标签：${tags.join('、')}，摘要应围绕这些关键词展开。`
+    : ''
+
+  // 根据分类定制摘要策略
+  let typeSpecificGuidance = ''
+  if (category === '技术开发') {
+    typeSpecificGuidance = `
+【技术文档/开源项目摘要策略】
+- 第一句：这是什么技术/工具/框架（一句话定义）
+- 第二句：核心功能或解决的问题（2-3个关键点）
+- 第三句：适用场景和技术栈（适合什么项目使用）
+- 如果是 GitHub 仓库，额外提及 Stars 数（如果有）、主要语言、最新更新时间（如果有）`
+  } else if (category === '学习研究') {
+    typeSpecificGuidance = `
+【教程/学习资料摘要策略】
+- 第一句：这份资料讲什么主题/技术
+- 第二句：内容覆盖范围和深度（入门/进阶/实战）
+- 第三句：适合什么基础的学习者，学完能掌握什么`
+  } else if (category === '效率工具') {
+    typeSpecificGuidance = `
+【工具/产品摘要策略】
+- 第一句：这是什么工具/产品（一句话定义）
+- 第二句：核心功能和差异化特点（与同类产品相比的优势）
+- 第三句：目标用户和使用场景（谁最需要这个工具）`
+  } else if (category === '资讯动态') {
+    typeSpecificGuidance = `
+【新闻/资讯摘要策略】
+- 第一句：核心事件或消息（发生了什么）
+- 第二句：关键背景和影响范围
+- 第三句：对读者有什么价值或需要关注的原因`
+  } else if (category === '产品设计') {
+    typeSpecificGuidance = `
+【产品/设计摘要策略】
+- 第一句：这是什么类型的产品设计资源/案例
+- 第二句：核心设计理念或方法论
+- 第三句：对产品经理/设计师的实用价值`
+  } else {
+    typeSpecificGuidance = `
+【通用摘要策略】
+- 第一句：这个页面/资源是什么（定义/概述）
+- 第二句：核心内容或功能（关键信息点）
+- 第三句：实用价值（适合什么人、解决什么问题）`
+  }
+
+  return `你是一个专业的网页内容摘要助手。请根据页面分类使用对应的摘要策略，生成100-160字的高质量中文摘要。${categoryHint}${tagsHint}
+
+=== 通用摘要原则 ===
+1. 信息密度：每句话都必须包含实质性信息，禁止废话和套话
+2. 不要复述标题中已明确的信息，而是补充标题没说的核心价值
+3. 务必根据提供的正文内容摘要，不要编造未提及的内容
+4. 对品牌多义词保持谨慎：如果 URL 属于 colosseum.org，Colosseum 指 Web3/Solana 生态平台，不是罗马斗兽场
+5. ⚠️ 如果正文内容为空或仅有域名/路径信息，说明页面内容不可获取（如需要登录），此时如实说明"页面内容需登录后查看，无法生成详细摘要"，不要自行编造内容
+
+=== 分类定制策略 ===${typeSpecificGuidance}
+
+=== 输出格式 ===
+直接输出摘要文本，不要任何标签、markdown格式或"摘要："前缀。
+必须使用2-3个完整中文句子，最后一个字符必须是句号、问号或感叹号。不要使用省略号，不要输出未完成的半句话。`
 }
 
 const KNOWN_DOMAIN_SUMMARIES: Array<{
@@ -193,22 +293,9 @@ export async function generateSummary(
     ? getContentForAI(content, 2400)
     : `${content.description}\n${content.url}`
 
-  // 本地预检：正文内容不可获取（登录墙/空白页等），直接返回占位摘要，避免 AI 编造
-  const isEmptyContent = !content.mainContent?.trim() || content.mainContent.trim().length < 50
-  const isEmptyDescription = !content.description?.trim()
   const isSparseContent = !content.mainContent?.trim() || content.mainContent.trim().length < 180
-  const isFallbackOnlyMetadata = body.length < 50 || (isEmptyContent && isEmptyDescription)
   const knownDomainSummary = getKnownDomainSummary(content.url, options, isSparseContent)
   if (knownDomainSummary) return knownDomainSummary
-
-  if (isEmptyContent && isEmptyDescription) {
-    const domain = getDomainFallback(content.url)
-    return `页面内容暂无法获取（可能需要登录或等待页面加载完成）。${domain ? `域名：${domain}` : ''}`.trim()
-  }
-  if (isFallbackOnlyMetadata) {
-    const domain = getDomainFallback(content.url)
-    return `页面内容暂无法获取（可能需要登录或等待页面加载完成）。${domain ? `域名：${domain}` : ''}`.trim()
-  }
 
 const userContent = `标题：${content.title}
 URL：${content.url}
@@ -219,12 +306,40 @@ ${options?.reason ? `分类依据：${options.reason}` : ''}
 ${body}`
 
   try {
-    const prompt = buildSummarySystemPrompt(options?.category, options?.subCategory)
-    return await chatCompletion(config, prompt, userContent, 300)
+    const prompt = buildSummarySystemPrompt(options?.category, options?.subCategory, options?.tags)
+    const summary = await chatCompletion(config, prompt, userContent, 500)
+    return normalizeSummaryText(summary)
   } catch (err) {
-    if (settings.aiServiceMode === 'byok') throw err
-    return null
+    throw err
   }
+}
+
+function normalizeSummaryText(summary: string): string {
+  let text = summary
+    .replace(/^摘要[:：]\s*/i, '')
+    .replace(/```[\s\S]*?```/g, match => match.replace(/```/g, ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  text = text.replace(/[.．]+$/g, '。')
+  if (/[。！？!?]$/.test(text)) return normalizeTerminalPunctuation(text)
+
+  const lastSentenceEnd = Math.max(
+    text.lastIndexOf('。'),
+    text.lastIndexOf('！'),
+    text.lastIndexOf('？'),
+    text.lastIndexOf('!'),
+    text.lastIndexOf('?'),
+  )
+  if (lastSentenceEnd >= 40) {
+    return normalizeTerminalPunctuation(text.slice(0, lastSentenceEnd + 1).trim())
+  }
+
+  return `${text.replace(/[，,、；;：:]+$/, '')}。`
+}
+
+function normalizeTerminalPunctuation(text: string): string {
+  return text.replace(/!/g, '！').replace(/\?/g, '？').replace(/\.([^0-9]|$)/g, '。$1').trim()
 }
 
 function getKnownDomainSummary(

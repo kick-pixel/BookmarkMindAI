@@ -17,7 +17,6 @@ export type AIProvider =
   | 'perplexity'
   | 'custom'
 export type AppLanguage = 'auto' | 'zh-CN' | 'en'
-export type AIServiceMode = 'byok' | 'hosted'
 
 export interface AIConfig {
   provider: AIProvider
@@ -91,7 +90,6 @@ export interface UserSettings {
   aiProvider: AIProvider
   apiKeys: Partial<Record<AIProvider, string>>
   aiEnabled: boolean
-  aiServiceMode: AIServiceMode
   // 功能开关
   autoClassify: boolean
   autoTag: boolean
@@ -102,11 +100,6 @@ export interface UserSettings {
   cleanupReminderDays: number // 多少天未访问触发提醒
   // 隐私
   sendContentToAI: boolean // 是否发送页面内容（而非只发标题/URL）
-  // 付费
-  plan: 'free' | 'pro'
-  aiUsageCount: number
-  aiUsageResetAt: number
-  freeQuotaPerMonth: number // 默认 100
   language: AppLanguage
   aiBaseUrls: Partial<Record<AIProvider, string>>
   aiModels: Partial<Record<AIProvider, string>>
@@ -120,7 +113,6 @@ export interface UsageStats {
   idleBookmarks: number
   sleepingBookmarks: number
   aiProcessedCount: number
-  aiUsageThisMonth: number
   topCategories: { name: string; count: number }[]
 }
 
@@ -146,7 +138,6 @@ export type MessageType =
   | 'REPROCESS_BOOKMARK'
   | 'DELETE_BOOKMARK'
   | 'CLEAN_DUPLICATE_BOOKMARKS'
-  | 'ARCHIVE_BOOKMARK'
   | 'AI_CLASSIFY'
   | 'AI_SUMMARIZE'
   | 'GET_SETTINGS'

@@ -332,6 +332,7 @@ export const DOMAIN_MAP: DomainMapEntry[] = [
 
   // ========== 资讯动态 ==========
   { domain: 'infoq.com',                 category: '资讯动态', subCategory: '科技新闻', confidence: 0.85 },
+  { domain: 'news.qq.com',               category: '资讯动态', subCategory: '科技新闻', confidence: 0.95 },
   { domain: '36kr.com',                  category: '资讯动态', subCategory: '科技新闻', confidence: 0.85 },
   { domain: 'huxiu.com',                 category: '资讯动态', subCategory: '科技新闻', confidence: 0.82 },
   { domain: 'juejin.cn',                 category: '学习研究', subCategory: '技术教程', confidence: 0.82 },

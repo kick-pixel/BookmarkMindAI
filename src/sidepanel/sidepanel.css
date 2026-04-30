@@ -742,10 +742,7 @@ body,
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.62;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .bm-ai-pending {

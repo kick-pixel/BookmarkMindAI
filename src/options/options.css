@@ -34,7 +34,7 @@ body {
   align-items: center;
   margin-bottom: 28px;
   padding: 26px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--border-accent);
   border-radius: 28px;
   background:
@@ -48,7 +48,7 @@ body {
   position: absolute;
   top: 18px;
   right: 18px;
-  z-index: 4;
+  z-index: 20;
 }
 
 .language-trigger {
@@ -85,6 +85,7 @@ body {
   right: 0;
   min-width: 148px;
   overflow: hidden;
+  z-index: 30;
   border: 1px solid rgba(124, 244, 255, 0.22);
   border-radius: 14px;
   background:
@@ -585,23 +586,6 @@ body {
   margin-bottom: 10px;
 }
 
-.usage-plan {
-  display: inline-flex;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.plan-free {
-  background: rgba(151, 203, 255, 0.08);
-  color: var(--text-secondary);
-}
-
-.plan-pro {
-  background: var(--accent-dim);
-  color: var(--accent-light);
-}
 
 .usage-track {
   height: 7px;
