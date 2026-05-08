@@ -1,7 +1,9 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { BOOKMARK_TAXONOMY } from '../lib/bookmarkTaxonomy'
-import { createTranslator } from '../lib/i18n'
+import { displayCategory, displayFolderPath } from '../lib/categoryI18n'
+import { createTranslator, resolveLocale } from '../lib/i18n'
+import type { Locale } from '../lib/i18n'
 import type { Bookmark, Category, ProcessingTask, UserSettings } from '../types'
 
 type FilterStatus = 'all' | 'active' | 'idle' | 'sleeping' | 'needsReview' | 'aiFailed' | 'noSummary' | 'duplicates' | 'inbox'
@@ -19,8 +21,10 @@ function getFolderKey(bookmark: Bookmark): string {
   return getFolderPath(bookmark).join('/')
 }
 
-function getFolderLabel(bookmark: Bookmark): string {
-  return getFolderKey(bookmark)
+function getFolderLabel(bookmark: Bookmark, locale?: Locale): string {
+  const path = getFolderPath(bookmark)
+  if (locale) return displayFolderPath(path, locale).join('/')
+  return path.join('/')
 }
 
 function getDuplicateKey(bookmark: Bookmark): string {
@@ -112,6 +116,7 @@ export default function SidePanelApp() {
   const [loading, setLoading] = useState(true)
   const [now] = useState(() => Date.now())
   const { t } = createTranslator(settings?.language)
+  const locale = resolveLocale(settings?.language)
   const aiConfigured = Boolean(settings?.aiEnabled)
   const aiNeedsSetup = Boolean(settings?.aiEnabled && !aiConfigured)
   const statusLabels: Record<FilterStatus, string> = {
@@ -293,7 +298,7 @@ export default function SidePanelApp() {
     score += scoreText(bookmark.url, tokens, 16)
     score += scoreText(bookmark.category, tokens, 20)
     score += scoreText(bookmark.subCategory, tokens, 22)
-    score += scoreText(getFolderLabel(bookmark), tokens, 24)
+    score += scoreText(getFolderLabel(bookmark, locale), tokens, 24)
     score += scoreText(bookmark.summary, tokens, 10)
     score += scoreText(bookmark.note, tokens, 12)
     score += scoreText(bookmark.aiReason, tokens, 8)
@@ -600,7 +605,7 @@ export default function SidePanelApp() {
                 onClick={() => setSelectedCat(folder.category)}
               >
                 <span className="cat-icon">▾</span>
-                <span className="cat-name">{folder.category}</span>
+                <span className="cat-name">{displayCategory(folder.category, locale)}</span>
                 <span className="cat-count">{folder.count}</span>
                 {folder.id && (
                   <span className="folder-actions">
@@ -618,7 +623,7 @@ export default function SidePanelApp() {
                     onClick={() => setSelectedCat(key)}
                   >
                     <span className="cat-icon">└</span>
-                    <span className="cat-name">{child.name}</span>
+                    <span className="cat-name">{displayCategory(child.name, locale)}</span>
                     <span className="cat-count">{child.count}</span>
                     {child.id && (
                       <span className="folder-actions">
@@ -722,6 +727,7 @@ export default function SidePanelApp() {
                 isReprocessing={reprocessingIds.has(bm.id)}
                 timeAgo={timeAgo}
                 t={t}
+                locale={locale}
                 searchQuery={searchQuery}
               />
             ))
@@ -879,6 +885,7 @@ function BookmarkCard({
   isReprocessing,
   timeAgo,
   t,
+  locale,
   searchQuery,
 }: {
   bookmark: Bookmark
@@ -892,6 +899,7 @@ function BookmarkCard({
   isReprocessing: boolean
   timeAgo: (ts?: number) => string
   t: ReturnType<typeof createTranslator>['t']
+  locale: Locale
   searchQuery?: string
 }) {
   const initialFolderPath = getFolderPath(bm)
@@ -985,7 +993,7 @@ function BookmarkCard({
               }}
             >
               {rootOptions.map(category => (
-                <option key={category.id} value={category.name}>{category.name}</option>
+                <option key={category.id} value={category.name}>{displayCategory(category.name, locale)}</option>
               ))}
             </select>
           </label>
@@ -995,7 +1003,7 @@ function BookmarkCard({
               <select className="input" value={draftSubCategory} onChange={e => setDraftSubCategory(e.target.value)}>
                 <option value="">{t('all')}</option>
                 {subCategoryOptions.map(folder => (
-                  <option key={folder} value={folder}>{folder}</option>
+                  <option key={folder} value={folder}>{displayCategory(folder, locale)}</option>
                 ))}
               </select>
             </label>
@@ -1022,7 +1030,7 @@ function BookmarkCard({
           className="status-dot"
           style={{ background: bm.status === 'active' ? 'var(--success)' : bm.status === 'idle' ? 'var(--warning)' : 'var(--text-muted)' }}
         />
-        <span className="badge badge-purple">{highlightText(getFolderLabel(bm), searchQuery)}</span>
+        <span className="badge badge-purple">{highlightText(getFolderLabel(bm, locale), searchQuery)}</span>
         {visibleTags.length ? visibleTags.map(tag => (
           <span key={tag} className="bm-tag">#<span>{highlightText(tag, searchQuery)}</span></span>
         )) : (
