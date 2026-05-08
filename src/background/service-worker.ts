@@ -535,6 +535,8 @@ async function analyzeBookmarksByOpeningTabs(
   let failedCount = 0
   const taskId = `${taskType}_${Date.now()}`
 
+  const CONCURRENT_TABS = 3
+
   await updateProcessingTask({
     id: taskId,
     type: taskType,
@@ -546,19 +548,7 @@ async function analyzeBookmarksByOpeningTabs(
     updatedAt: Date.now(),
   })
 
-  for (const bookmark of imported) {
-    await updateProcessingTask({
-      id: taskId,
-      type: taskType,
-      status: 'running',
-      total,
-      processed: processedCount,
-      failed: failedCount,
-      currentTitle: bookmark.title,
-      startedAt: Date.now(),
-      updatedAt: Date.now(),
-    })
-
+  async function processOneBookmark(bookmark: Bookmark) {
     try {
       const analyzed = await analyzeBookmarkInTemporaryTab(bookmark, {
         active: options.active ?? false,
@@ -575,6 +565,16 @@ async function analyzeBookmarksByOpeningTabs(
     }
     processedCount++
     await broadcastProcessingProgress(taskId, taskType, processedCount, total, failedCount)
+  }
+
+  // Process in concurrent batches of CONCURRENT_TABS
+  const chunks: Bookmark[][] = []
+  for (let i = 0; i < imported.length; i += CONCURRENT_TABS) {
+    chunks.push(imported.slice(i, i + CONCURRENT_TABS))
+  }
+
+  for (const chunk of chunks) {
+    await Promise.all(chunk.map(processOneBookmark))
   }
 
   await updateProcessingTask({
