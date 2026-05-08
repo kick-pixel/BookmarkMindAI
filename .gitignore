@@ -8,8 +8,6 @@ build/
 out/
 *.tsbuildinfo
 
-docs/
-
 # Vite / tool caches
 .vite/
 .vite-temp/
