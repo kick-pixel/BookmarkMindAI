@@ -299,15 +299,20 @@ export default function SidePanelApp() {
     score += scoreText(bookmark.category, tokens, 20)
     score += scoreText(bookmark.subCategory, tokens, 22)
     score += scoreText(getFolderLabel(bookmark, locale), tokens, 24)
-    score += scoreText(bookmark.summary, tokens, 10)
+    score += scoreText(bookmark.summary, tokens, 14)
     score += scoreText(bookmark.note, tokens, 12)
     score += scoreText(bookmark.aiReason, tokens, 8)
     score += bookmark.tags.reduce((sum, tag) => sum + scoreText(tag, tokens, 28), 0)
     score += bookmark.keywords?.reduce((sum, keyword) => sum + scoreText(keyword, tokens, 24), 0) ?? 0
     score += bookmark.sourceFolderPath?.reduce((sum, folder) => sum + scoreText(folder, tokens, 10), 0) ?? 0
-    score += Math.max(0, 5 - Math.floor((now - bookmark.createdAt) / 86400000 / 7))
+    // Recency: bookmarks created in last 10 weeks get up to 10 bonus points
+    score += Math.max(0, 10 - Math.floor((now - bookmark.createdAt) / 86400000 / 7))
+    // Visit weight: frequently visited bookmarks get up to 15 bonus points
+    score += Math.min(bookmark.visitCount ?? 0, 15)
+    // Active status bonus: recently active bookmarks score higher
+    if (bookmark.status === 'active') score += 5
     return score
-  }, [now])
+  }, [now, locale])
 
   const displayedBookmarks = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
