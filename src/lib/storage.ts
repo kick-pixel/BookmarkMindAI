@@ -46,6 +46,9 @@ export const DEFAULT_SETTINGS: UserSettings = {
   aiModels: {},
   customBaseUrl: '',
   customModel: '',
+  cloudEnabled: false,
+  aiSource: 'byok',
+  lastSyncAt: 0,
 }
 
 export const DEFAULT_CATEGORIES: Category[] = [

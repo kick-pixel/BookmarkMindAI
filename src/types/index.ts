@@ -105,6 +105,10 @@ export interface UserSettings {
   aiModels: Partial<Record<AIProvider, string>>
   customBaseUrl?: string
   customModel?: string
+  // Cloud sync
+  cloudEnabled: boolean
+  aiSource: 'byok' | 'cloud'
+  lastSyncAt: number
 }
 
 export interface UsageStats {
@@ -157,6 +161,11 @@ export type MessageType =
   | 'EXTRACT_CONTENT'
   | 'IMPORT_BOOKMARKS'
   | 'EXPORT_BOOKMARKS'
+  | 'CLOUD_LOGIN'
+  | 'CLOUD_LOGOUT'
+  | 'CLOUD_SYNC'
+  | 'CLOUD_AI_PROCESS'
+  | 'CLOUD_GET_STATUS'
 
 export interface Message<T = unknown> {
   type: MessageType
