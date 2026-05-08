@@ -8,7 +8,10 @@
     "build": "tsc --noEmit && vite build",
     "build:ext": "vite build",
     "lint": "eslint src --ext ts,tsx",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
@@ -19,17 +22,22 @@
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.0.0-beta.33",
     "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^6.9.1",
     "@types/chrome": "^0.1.40",
+    "@types/jsdom": "^28.0.1",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/coverage-v8": "^4.1.5",
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.5.0",
+    "jsdom": "^29.1.1",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "vitest": "^4.1.5"
   }
 }
