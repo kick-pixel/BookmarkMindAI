@@ -1,6 +1,4 @@
-import type { AppLanguage } from '../types'
 import type { Locale } from './i18n'
-import { resolveLocale } from './i18n'
 
 export interface CategoryI18nEntry {
   en: string

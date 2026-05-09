@@ -105,7 +105,7 @@ export async function getBookmarkById(id: string): Promise<Bookmark | undefined>
 
 let cloudSyncTimer: ReturnType<typeof setTimeout> | null = null
 
-function enqueueCloudSyncPush(bookmarkId: string): void {
+function enqueueCloudSyncPush(): void {
   // Debounced cloud sync: wait 5s after last write
   if (cloudSyncTimer) clearTimeout(cloudSyncTimer)
   cloudSyncTimer = setTimeout(async () => {
@@ -146,7 +146,7 @@ export async function saveBookmark(bookmark: Bookmark): Promise<Bookmark> {
   ensureCategoryEntries(categories, saved.folderPath ?? [saved.category])
   await chrome.storage.local.set({ [KEYS.CATEGORIES]: categories })
   // Enqueue cloud sync push if cloud is enabled
-  enqueueCloudSyncPush(saved.id)
+  enqueueCloudSyncPush()
   return saved
 }
 

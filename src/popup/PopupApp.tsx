@@ -2,7 +2,6 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { createTranslator } from '../lib/i18n'
 import type { Bookmark, ExtractedContent, UserSettings } from '../types'
 
-const SHOW_UPGRADE_LINKS = false
 
 export default function PopupApp() {
   const [tab, setTab] = useState<chrome.tabs.Tab | null>(null)

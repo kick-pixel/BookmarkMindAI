@@ -211,7 +211,7 @@ function buildSummarySystemPrompt(
     : ''
 
   // 根据分类定制摘要策略
-  let typeSpecificGuidance = ''
+  let typeSpecificGuidance: string
   if (category === '技术开发') {
     typeSpecificGuidance = `
 【技术文档/开源项目摘要策略】
@@ -305,13 +305,9 @@ ${options?.reason ? `分类依据：${options.reason}` : ''}
 正文内容：
 ${body}`
 
-  try {
-    const prompt = buildSummarySystemPrompt(options?.category, options?.subCategory, options?.tags)
-    const summary = await chatCompletion(config, prompt, userContent, 500)
-    return normalizeSummaryText(summary)
-  } catch (err) {
-    throw err
-  }
+  const prompt = buildSummarySystemPrompt(options?.category, options?.subCategory, options?.tags)
+  const summary = await chatCompletion(config, prompt, userContent, 500)
+  return normalizeSummaryText(summary)
 }
 
 function normalizeSummaryText(summary: string): string {

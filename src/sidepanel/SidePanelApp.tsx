@@ -210,7 +210,7 @@ export default function SidePanelApp() {
     }
     chrome.runtime.onMessage.addListener(handler)
     return () => chrome.runtime.onMessage.removeListener(handler)
-  }, [])
+  }, [refreshLibrary])
 
   const duplicateKeys = useMemo(() => {
     const counts = new Map<string, number>()

@@ -6,7 +6,6 @@ import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { createTranslator } from '../lib/i18n'
 import type { AIProvider, AppLanguage, Bookmark, UserSettings } from '../types'
 
-const SHOW_UPGRADE_LINKS = false
 
 export default function OptionsApp() {
   const [settings, setSettings] = useState<UserSettings | null>(null)
