@@ -2,6 +2,7 @@
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { BOOKMARK_TAXONOMY } from '../lib/bookmarkTaxonomy'
 import { displayCategory, displayFolderPath } from '../lib/categoryI18n'
+import { resolveAIConfig } from '../lib/aiConfig'
 import { isAuthenticated } from '../lib/cloud'
 import { createTranslator, resolveLocale } from '../lib/i18n'
 import type { Locale } from '../lib/i18n'
@@ -120,8 +121,7 @@ export default function SidePanelApp() {
   const [cloudAuthenticated, setCloudAuthenticated] = useState(false)
   const { t } = createTranslator(settings?.language)
   const locale = resolveLocale(settings?.language)
-  const aiConfigured = Boolean(settings?.aiEnabled)
-  const aiNeedsSetup = Boolean(settings?.aiEnabled && !aiConfigured)
+  const aiNeedsSetup = Boolean(settings?.aiEnabled && !resolveAIConfig(settings))
   const statusLabels: Record<FilterStatus, string> = {
     all: t('all'),
     active: t('active'),

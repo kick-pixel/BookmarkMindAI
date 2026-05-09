@@ -22,6 +22,7 @@ import {
   getDomain,
   normalizeUrl,
 } from '../lib/storage'
+import { cleanupTombstones } from '../lib/bookmarkRepository'
 import { loginWithGoogle, logout, getCloudUser, syncBookmarks, collectPendingChanges } from '../lib/cloud'
 import { generateSummary, extractKeywords } from '../lib/ai'
 import { smartClassify } from '../lib/bookmarkClassifier'
@@ -113,6 +114,8 @@ chrome.alarms.create('daily-health-check', { periodInMinutes: 24 * 60 })
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'daily-health-check') {
     await updateBookmarkStatuses()
+    const cleaned = await cleanupTombstones()
+    if (cleaned > 0) console.log(`[BAI] Cleaned ${cleaned} expired tombstones`)
   }
 })
 

@@ -107,3 +107,21 @@ export async function clearBookmarkRecords(): Promise<void> {
   transaction.objectStore(BOOKMARK_STORE).clear()
   await transactionDone(transaction)
 }
+
+/**
+ * Remove tombstone records older than 90 days to prevent IndexedDB growth.
+ * Only safe after sync has been completed or for bookmarks that will never sync.
+ */
+export async function cleanupTombstones(maxAgeDays = 90): Promise<number> {
+  const cutoff = Date.now() - maxAgeDays * 86400000
+  const all = await getAllBookmarkRecords({ includeDeleted: true })
+  const expired = all.filter(bm => bm.deletedAt && bm.deletedAt < cutoff)
+  if (!expired.length) return 0
+
+  const db = await openDatabase()
+  const transaction = db.transaction(BOOKMARK_STORE, 'readwrite')
+  const store = transaction.objectStore(BOOKMARK_STORE)
+  expired.forEach(bm => store.delete(bm.id))
+  await transactionDone(transaction)
+  return expired.length
+}

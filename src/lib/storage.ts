@@ -258,7 +258,8 @@ export async function deleteBookmarksBulk(ids: string[]): Promise<Bookmark[]> {
 
 export async function recordVisit(url: string): Promise<void> {
   const bookmarks = await getAllBookmarks()
-  const bm = bookmarks.find(b => b.url === url)
+  const normalized = normalizeUrl(url)
+  const bm = bookmarks.find(b => b.normalizedUrl === normalized)
   if (bm) {
     bm.lastVisitedAt = Date.now()
     bm.visitCount = (bm.visitCount ?? 0) + 1
