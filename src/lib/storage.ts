@@ -103,6 +103,20 @@ export async function getBookmarkById(id: string): Promise<Bookmark | undefined>
   return getBookmarkRecordById(id)
 }
 
+let cloudSyncTimer: ReturnType<typeof setTimeout> | null = null
+
+function enqueueCloudSyncPush(bookmarkId: string): void {
+  // Debounced cloud sync: wait 5s after last write
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer)
+  cloudSyncTimer = setTimeout(async () => {
+    try {
+      await chrome.runtime.sendMessage({ type: 'CLOUD_SYNC' })
+    } catch {
+      // Cloud not available — silent fallback
+    }
+  }, 5000)
+}
+
 export async function saveBookmark(bookmark: Bookmark): Promise<Bookmark> {
   const bookmarks = await getAllBookmarks()
   const normalized = normalizeBookmark(bookmark)
@@ -131,6 +145,8 @@ export async function saveBookmark(bookmark: Bookmark): Promise<Bookmark> {
   const categories = await getCategories()
   ensureCategoryEntries(categories, saved.folderPath ?? [saved.category])
   await chrome.storage.local.set({ [KEYS.CATEGORIES]: categories })
+  // Enqueue cloud sync push if cloud is enabled
+  enqueueCloudSyncPush(saved.id)
   return saved
 }
 

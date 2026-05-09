@@ -22,6 +22,7 @@ import {
   getDomain,
   normalizeUrl,
 } from '../lib/storage'
+import { loginWithGoogle, logout, getCloudUser, syncBookmarks, collectPendingChanges } from '../lib/cloud'
 import { generateSummary, extractKeywords } from '../lib/ai'
 import { smartClassify } from '../lib/bookmarkClassifier'
 import { recordUserCorrection } from '../lib/bookmarkClassifier/userLearning'
@@ -182,6 +183,46 @@ function notifySaved(): void {
     title: chrome.i18n.getMessage('notificationSavedTitle') || 'Saved to BookmarkMind AI',
     message: chrome.i18n.getMessage('notificationSavedMessage') || 'AI is organizing this bookmark in the background.',
   }).catch(() => {})
+}
+
+async function applyRemoteSync(changes: Array<{ action: string; payload: Partial<Bookmark> | null }>): Promise<void> {
+  for (const change of changes) {
+    if (change.action === 'delete' && change.payload) {
+      await deleteBookmark(change.payload.id!)
+    } else if (change.payload?.id) {
+      const bookmarks = await getAllBookmarks()
+      const existing = bookmarks.find(b => b.id === change.payload!.id)
+      if (existing) {
+        const merged = { ...existing, ...change.payload, syncState: 'synced' as const }
+        await saveBookmark(merged)
+      } else {
+        await saveBookmark(change.payload as Bookmark)
+      }
+    }
+  }
+}
+
+async function applyConflictResolutions(
+  conflicts: Array<{ id: string; resolution: string; payload: Partial<Bookmark> }>,
+): Promise<void> {
+  for (const conflict of conflicts) {
+    const bookmarks = await getAllBookmarks()
+    const existing = bookmarks.find(b => b.id === conflict.id)
+    if (existing) {
+      const merged = { ...existing, ...conflict.payload, syncState: 'synced' as const }
+      await saveBookmark(merged)
+    }
+  }
+}
+
+async function markBookmarksSynced(ids: string[]): Promise<void> {
+  const bookmarks = await getAllBookmarks()
+  for (const bm of bookmarks) {
+    if (ids.includes(bm.id) && bm.syncState !== 'synced') {
+      bm.syncState = 'synced'
+      await saveBookmark(bm)
+    }
+  }
 }
 
 // ── 消息处理中心 ─────────────────────────────────────────────
@@ -381,6 +422,57 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
       const bookmarks = await getAllBookmarks()
       const found = bookmarks.find(b => b.url === url && !b.isArchived)
       return { success: true, data: found ?? null }
+    }
+
+    case 'CLOUD_LOGIN': {
+      const success = await loginWithGoogle()
+      if (success) {
+        const user = await getCloudUser()
+        return { success: true, data: user }
+      }
+      return { success: false, error: 'Login failed' }
+    }
+
+    case 'CLOUD_LOGOUT': {
+      await logout()
+      return { success: true }
+    }
+
+    case 'CLOUD_SYNC': {
+      const bookmarks = await getAllBookmarks()
+      const settings = await getSettings()
+      const lastSyncAt = settings.lastSyncAt ? new Date(settings.lastSyncAt).toISOString() : '1970-01-01T00:00:00Z'
+      const changes = collectPendingChanges(bookmarks)
+
+      if (!changes.length) {
+        const result = await syncBookmarks(lastSyncAt, [])
+        if (!result) return { success: false, error: 'Sync failed' }
+
+        await applyRemoteSync(result.remoteChanges)
+
+        await updateSettings({ lastSyncAt: Date.now() })
+        return { success: true, data: { synced: result.remoteChanges.length } }
+      }
+
+      const result = await syncBookmarks(lastSyncAt, changes)
+      if (!result) return { success: false, error: 'Sync failed' }
+
+      await applyRemoteSync(result.remoteChanges)
+      await applyConflictResolutions(result.conflicts)
+
+      const syncedIds = new Set([
+        ...changes.map(c => c.id),
+        ...result.remoteChanges.map(c => c.id),
+      ])
+      await markBookmarksSynced(Array.from(syncedIds))
+
+      await updateSettings({ lastSyncAt: Date.now() })
+      return { success: true, data: { synced: result.remoteChanges.length + changes.length } }
+    }
+
+    case 'CLOUD_GET_STATUS': {
+      const user = await getCloudUser()
+      return { success: true, data: user }
     }
 
     default:
