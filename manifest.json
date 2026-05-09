@@ -50,7 +50,8 @@
     "sidePanel",
     "contextMenus",
     "notifications",
-    "alarms"
+    "alarms",
+    "identity"
   ],
   "options_ui": {
     "page": "src/options/options.html",

@@ -164,7 +164,6 @@ export type MessageType =
   | 'CLOUD_LOGIN'
   | 'CLOUD_LOGOUT'
   | 'CLOUD_SYNC'
-  | 'CLOUD_AI_PROCESS'
   | 'CLOUD_GET_STATUS'
 
 export interface Message<T = unknown> {

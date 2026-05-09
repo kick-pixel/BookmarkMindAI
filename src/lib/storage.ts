@@ -188,6 +188,8 @@ export async function saveBookmarksBulk(
 
   await putBookmarkRecords(existing)
   await chrome.storage.local.set({ [KEYS.CATEGORIES]: categories })
+  // Trigger cloud sync for bulk import
+  enqueueCloudSyncPush()
   return { imported, skipped, importedUrls, reprocessUrls }
 }
 
@@ -235,18 +237,23 @@ export async function migrateLegacyImportedBookmarks(): Promise<string[]> {
     [KEYS.CATEGORIES]: categories,
   })
   await putBookmarkRecords(migrated.map(bookmark => markBookmarkForLocalWrite(bookmark, bookmark)))
+  // Trigger cloud sync for legacy migration
+  enqueueCloudSyncPush()
   return migratedUrls
 }
 
 export async function deleteBookmark(id: string): Promise<void> {
   await migrateBookmarksToIndexedDB()
   await markBookmarkRecordsDeleted([id])
+  enqueueCloudSyncPush()
 }
 
 export async function deleteBookmarksBulk(ids: string[]): Promise<Bookmark[]> {
   if (!ids.length) return getAllBookmarks()
   await migrateBookmarksToIndexedDB()
-  return markBookmarkRecordsDeleted(ids)
+  const remaining = markBookmarkRecordsDeleted(ids)
+  enqueueCloudSyncPush()
+  return remaining
 }
 
 export async function recordVisit(url: string): Promise<void> {
