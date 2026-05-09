@@ -766,6 +766,49 @@ body {
   background: var(--danger);
 }
 
+.cloud-account-card {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+.cloud-user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.cloud-user-email {
+  font-weight: 500;
+}
+.cloud-tier-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.cloud-tier-badge.pro {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.cloud-tier-badge.unlimited {
+  background: #d1fae5;
+  color: #047857;
+}
+.cloud-tier-badge.free {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+.cloud-status {
+  color: var(--text-muted, #6b7280);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.cloud-actions {
+  display: flex;
+  gap: 8px;
+}
+
 @media (max-width: 720px) {
   .opt-shell {
     width: min(100% - 20px, 920px);

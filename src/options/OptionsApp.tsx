@@ -1,4 +1,6 @@
 ﻿import React, { useCallback, useEffect, useState } from 'react'
+import { loginWithGoogle, logout, getCloudUser, isAuthenticated } from '../lib/cloud'
+import type { CloudUser } from '../lib/cloud'
 import { AI_PROVIDER_PRESETS, getProviderPreset } from '../lib/aiProviders'
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { createTranslator } from '../lib/i18n'
@@ -13,6 +15,8 @@ export default function OptionsApp() {
   const [toast, setToast] = useState('')
   const [languageMenuOpen, setLanguageMenuOpen] = useState(false)
   const languageSwitcherRef = React.useRef<HTMLDivElement | null>(null)
+  const [cloudUser, setCloudUser] = useState<CloudUser | null>(null)
+  const [cloudAuthenticated, setCloudAuthenticated] = useState(false)
 
   const { t } = createTranslator(settings?.language)
   useEffect(() => {
@@ -24,6 +28,17 @@ export default function OptionsApp() {
       }
     }
     load()
+  }, [])
+
+  useEffect(() => {
+    void (async () => {
+      const authed = await isAuthenticated()
+      setCloudAuthenticated(authed)
+      if (authed) {
+        const user = await getCloudUser()
+        setCloudUser(user)
+      }
+    })()
   }, [])
 
   useEffect(() => {
@@ -161,6 +176,51 @@ export default function OptionsApp() {
           )}
         </div>
       </header>
+
+      <section className="opt-section">
+        <div className="opt-section-title">Cloud Account</div>
+        {cloudAuthenticated && cloudUser ? (
+          <div className="cloud-account-card">
+            <div className="cloud-user-info">
+              <span className="cloud-user-email">{cloudUser.email}</span>
+              <span className={`cloud-tier-badge ${cloudUser.tier}`}>
+                {cloudUser.tier.charAt(0).toUpperCase() + cloudUser.tier.slice(1)}
+              </span>
+            </div>
+            <p className="cloud-status">
+              Sync: {cloudUser.subscriptionStatus === 'active' ? 'Active' : 'Local mode only'}
+            </p>
+            <div className="cloud-actions">
+              <button className="btn btn-ghost btn-sm" onClick={async () => {
+                await logout()
+                setCloudAuthenticated(false)
+                setCloudUser(null)
+              }}>
+                Sign Out
+              </button>
+              {cloudUser.tier === 'free' && (
+                <a className="btn btn-primary btn-sm" href="https://bookmarkmind.ai/pricing" target="_blank" rel="noopener noreferrer">
+                  Upgrade to Pro
+                </a>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="cloud-account-card">
+            <p className="cloud-status">Sign in to enable cloud sync and cross-device knowledge base.</p>
+            <button className="btn btn-primary" onClick={async () => {
+              const success = await loginWithGoogle()
+              if (success) {
+                setCloudAuthenticated(true)
+                const user = await getCloudUser()
+                setCloudUser(user)
+              }
+            }}>
+              Sign in with Google
+            </button>
+          </div>
+        )}
+      </section>
 
       <section className="opt-section">
         <div className="opt-section-title">{t('aiService')}</div>
