@@ -2,6 +2,7 @@
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { BOOKMARK_TAXONOMY } from '../lib/bookmarkTaxonomy'
 import { displayCategory, displayFolderPath } from '../lib/categoryI18n'
+import { isAuthenticated } from '../lib/cloud'
 import { createTranslator, resolveLocale } from '../lib/i18n'
 import type { Locale } from '../lib/i18n'
 import type { Bookmark, Category, ProcessingTask, UserSettings } from '../types'
@@ -115,6 +116,8 @@ export default function SidePanelApp() {
   const [dismissedProcessingTaskIds, setDismissedProcessingTaskIds] = useState<Set<string>>(() => new Set())
   const [loading, setLoading] = useState(true)
   const [now] = useState(() => Date.now())
+  const [syncing, setSyncing] = useState(false)
+  const [cloudAuthenticated, setCloudAuthenticated] = useState(false)
   const { t } = createTranslator(settings?.language)
   const locale = resolveLocale(settings?.language)
   const aiConfigured = Boolean(settings?.aiEnabled)
@@ -131,16 +134,37 @@ export default function SidePanelApp() {
     inbox: t('inboxFilter'),
   }
 
-  useEffect(() => {
-    async function refreshLibrary() {
-      const [bmRes, catRes] = await Promise.all([
-        chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
-        chrome.runtime.sendMessage({ type: 'GET_CATEGORIES' }),
-      ])
-      if (bmRes.success) setBookmarks(bmRes.data.filter((bookmark: Bookmark) => !bookmark.isArchived))
-      if (catRes.success) setCategories(catRes.data)
-    }
+  const refreshLibrary = useCallback(async () => {
+    const [bmRes, catRes] = await Promise.all([
+      chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
+      chrome.runtime.sendMessage({ type: 'GET_CATEGORIES' }),
+    ])
+    if (bmRes.success) setBookmarks(bmRes.data.filter((bookmark: Bookmark) => !bookmark.isArchived))
+    if (catRes.success) setCategories(catRes.data)
+  }, [])
 
+  const handleSync = useCallback(async () => {
+    setSyncing(true)
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'CLOUD_SYNC' })
+      if (res?.success) {
+        await refreshLibrary()
+      }
+    } catch {
+      // Cloud not available
+    } finally {
+      setSyncing(false)
+    }
+  }, [refreshLibrary])
+
+  useEffect(() => {
+    void (async () => {
+      const authed = await isAuthenticated()
+      setCloudAuthenticated(authed)
+    })()
+  }, [])
+
+  useEffect(() => {
     async function loadData() {
       const [bmRes, catRes, settingsRes, taskRes] = await Promise.all([
         chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }),
@@ -536,6 +560,15 @@ export default function SidePanelApp() {
           <button className="btn btn-ghost btn-sm" onClick={handleImportBookmarks}>
             {t('importBookmarks')}
           </button>
+          {cloudAuthenticated && (
+            <button
+              className={`btn btn-ghost btn-sm sync-btn ${syncing ? 'syncing' : ''}`}
+              onClick={handleSync}
+              aria-label="Sync with cloud"
+            >
+              &#x21bb;
+            </button>
+          )}
           <select
             className="sort-select"
             value={sortKey}
