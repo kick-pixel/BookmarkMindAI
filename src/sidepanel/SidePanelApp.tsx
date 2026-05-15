@@ -8,6 +8,18 @@ import { createTranslator, resolveLocale } from '../lib/i18n'
 import type { Locale } from '../lib/i18n'
 import type { Bookmark, Category, ProcessingTask, UserSettings } from '../types'
 
+const CONTENT_EXTRACTION_ERRORS = [
+  '页面正文未加载完成',
+  '页面加载超时',
+  '无法打开页面标签页',
+  '当前没有可摘要的页面正文',
+  '自动打开页面分析失败',
+]
+
+function isContentExtractionError(error: string): boolean {
+  return CONTENT_EXTRACTION_ERRORS.some(pattern => error.includes(pattern))
+}
+
 type FilterStatus = 'all' | 'active' | 'idle' | 'sleeping' | 'needsReview' | 'aiFailed' | 'noSummary' | 'duplicates' | 'inbox'
 type SortKey = 'newest' | 'oldest' | 'visited' | 'alpha'
 
@@ -133,6 +145,8 @@ export default function SidePanelApp() {
     duplicates: t('duplicatesFilter'),
     inbox: t('inboxFilter'),
   }
+
+  const visibleFilterStatuses: FilterStatus[] = ['all', 'needsReview', 'aiFailed', 'noSummary', 'duplicates']
 
   const refreshLibrary = useCallback(async () => {
     const [bmRes, catRes] = await Promise.all([
@@ -548,7 +562,7 @@ export default function SidePanelApp() {
   return (
     <div className="sp-shell">
       <header className="sp-header">
-        <div className="sp-logo">BAI</div>
+        <img className="sp-logo" src="/icons/icon48.png" alt="BookmarkMind AI logo" />
         <div className="sp-heading">
           <div className="sp-title">{t('library')}</div>
           <div className="sp-subtitle">{t('panelSubtitle')}</div>
@@ -630,7 +644,7 @@ export default function SidePanelApp() {
           </div>
           <button
             className={`cat-item ${selectedCat === 'all' ? 'active' : ''}`}
-            onClick={() => setSelectedCat('all')}
+            onClick={() => { setSelectedCat('all'); setFilterStatus('all') }}
           >
             <span className="cat-icon">ALL</span>
             <span className="cat-name">{t('all')}</span>
@@ -640,7 +654,7 @@ export default function SidePanelApp() {
             <div key={folder.category} className="folder-group">
               <button
                 className={`cat-item ${selectedCat === folder.category ? 'active' : ''}`}
-                onClick={() => setSelectedCat(folder.category)}
+                onClick={() => { setSelectedCat(folder.category); setFilterStatus('all') }}
               >
                 <span className="cat-icon">▾</span>
                 <span className="cat-name">{displayCategory(folder.category, locale)}</span>
@@ -658,7 +672,7 @@ export default function SidePanelApp() {
                   <button
                     key={key}
                     className={`cat-item child ${selectedCat === key ? 'active' : ''}`}
-                    onClick={() => setSelectedCat(key)}
+                    onClick={() => { setSelectedCat(key); setFilterStatus('all') }}
                   >
                     <span className="cat-icon">└</span>
                     <span className="cat-name">{displayCategory(child.name, locale)}</span>
@@ -680,53 +694,12 @@ export default function SidePanelApp() {
         </nav>
 
         <main className="sp-content">
-          {selectedCat === 'all' && !searchQuery && (
-            <div className="sp-stats">
-              <div className="stat-card">
-                <div className="stat-num accent">{stats.total}</div>
-                <div className="stat-label">{t('totalBookmarks')}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-num success">{stats.active}</div>
-                <div className="stat-label">{t('activeBookmarks')}</div>
-              </div>
-              <button className="stat-card stat-button" onClick={() => setFilterStatus('needsReview')}>
-                <div className={`stat-num ${stats.needsReview > 0 ? 'warn' : 'success'}`}>{stats.needsReview}</div>
-                <div className="stat-label">{t('needsReview')}</div>
-              </button>
-              <div className="stat-card">
-                <div className="stat-num muted">{stats.sleeping}</div>
-                <div className="stat-label">{t('sleepingBookmarks')}</div>
-              </div>
-            </div>
-          )}
-
-          <div className="sp-ops compact">
-            <div>
-              <strong>{t('resultCount', { count: displayedBookmarks.length })}</strong>
-              <span>{stats.needsReview > 0 ? t('healthSummary', { count: stats.needsReview }) : searchQuery ? t('searchPlaceholder') : t('editTagsCta')}</span>
-            </div>
-            <div className="sp-ops-actions">
-              {stats.noSummary + stats.aiFailed + stats.inbox > 0 && (
-                <button className="btn btn-ghost btn-sm" onClick={handleRetryFailed}>
-                  {t('repairWithAI')}
-                </button>
-              )}
-              {stats.duplicates > 0 && (
-                <button className="btn btn-ghost btn-sm" onClick={handleCleanDuplicates}>
-                  {t('cleanDuplicates')}
-                </button>
-              )}
-              {stats.emptyFolders > 0 && (
-                <button className="btn btn-ghost btn-sm" onClick={handleCleanEmptyFolders}>
-                  {t('cleanEmptyFolders')}
-                </button>
-              )}
-            </div>
+          <div className="sp-result-count">
+            <strong>{t('resultCount', { count: displayedBookmarks.length })}</strong>
           </div>
 
           <div className="sp-filters">
-            {(Object.keys(statusLabels) as FilterStatus[]).map(s => (
+            {visibleFilterStatuses.map(s => (
               <button
                 key={s}
                 className={`filter-chip ${filterStatus === s ? 'active' : ''}`}
@@ -853,7 +826,9 @@ function AIStatusNote({
   if (bookmark.aiStatus === 'failed') {
     return (
       <div className="ai-status-note failed">
-        {bookmark.aiError ? `${t('aiFailed')}: ${bookmark.aiError}` : t('aiFailed')}
+        {bookmark.aiError
+          ? `${isContentExtractionError(bookmark.aiError) ? t('aiFailedContent') : t('aiFailed')}: ${bookmark.aiError}`
+          : t('aiFailed')}
       </div>
     )
   }

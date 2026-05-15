@@ -102,7 +102,7 @@ export default function PopupApp() {
 
       {/* 头部 */}
       <header className="popup-header">
-        <div className="popup-logo">🔖</div>
+        <img className="popup-logo" src="/icons/icon48.png" alt="BookmarkMind AI logo" />
         <div>
           <div className="popup-title">{t('appName')}</div>
           <div className="popup-subtitle">{t('appSubtitle')}</div>

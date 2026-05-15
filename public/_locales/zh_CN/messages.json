@@ -1,8 +1,8 @@
 {
-  "extName": {
+  "extensionName": {
     "message": "BookmarkMind AI · AI 个人知识库助手"
   },
-  "extDescription": {
+  "extensionDescription": {
     "message": "AI 驱动的本地优先书签管理工具，自动分类、生成摘要、语义检索，让网页收藏变成可复用的个人知识库。"
   },
   "openBookmarkMindAI": {

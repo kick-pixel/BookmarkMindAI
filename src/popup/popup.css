@@ -34,14 +34,9 @@ body {
 .popup-logo {
   width: 34px;
   height: 34px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border-accent);
+  display: block;
+  object-fit: cover;
   border-radius: 11px;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-size: 17px;
   box-shadow: var(--shadow-sm);
 }
 

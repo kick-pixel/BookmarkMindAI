@@ -141,16 +141,9 @@ body {
 .opt-brand-mark {
   width: 104px;
   height: 104px;
-  display: grid;
-  place-items: center;
+  display: block;
+  object-fit: cover;
   border-radius: 24px;
-  border: 1px solid var(--border-accent);
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-size: 30px;
-  font-weight: 900;
-  letter-spacing: -0.08em;
   box-shadow: 12px 12px 0 rgba(35, 213, 255, 0.14);
 }
 
@@ -823,7 +816,6 @@ body {
   .opt-brand-mark {
     width: 76px;
     height: 76px;
-    font-size: 22px;
   }
 
   .opt-row {

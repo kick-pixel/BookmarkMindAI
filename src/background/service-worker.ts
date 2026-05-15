@@ -36,7 +36,7 @@ let autoAnalysisQueue: Promise<void> = Promise.resolve()
 const PROCESSING_TASK_KEY = 'bai_processing_task'
 const CONTEXT_MENU_SAVE_PAGE = 'bai-save-page'
 const CONTEXT_MENU_OPEN_PANEL = 'bai-open-panel'
-const AUTO_ANALYZE_DELAY_MS = 1400
+const AUTO_ANALYZE_DELAY_MS = 3000
 const AUTO_ANALYZE_TAB_TIMEOUT_MS = 25000
 
 function dedupAI<T>(key: string, factory: () => Promise<T>): Promise<T> {
@@ -519,12 +519,23 @@ async function extractContentFromTab(tab: chrome.tabs.Tab): Promise<ExtractedCon
   }
 }
 
-function extractPageContentInPage(): ExtractedContent {
+async function extractPageContentInPage(): Promise<ExtractedContent> {
+  await waitForReadablePageInPage()
+
   function cleanText(text: string): string {
     return text
       .replace(/\s+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim()
+  }
+
+  async function waitForReadablePageInPage(): Promise<void> {
+    if (document.readyState === 'loading') {
+      await new Promise<void>(resolve => document.addEventListener('DOMContentLoaded', () => resolve(), { once: true }))
+    }
+    const bodyLen = (document.body?.textContent ?? '').replace(/\s+/g, ' ').trim().length
+    if (bodyLen >= 300) return
+    await new Promise<void>(resolve => window.setTimeout(resolve, 900))
   }
 
   function extractMainText(): string {

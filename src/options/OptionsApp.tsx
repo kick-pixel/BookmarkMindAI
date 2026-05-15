@@ -139,7 +139,7 @@ export default function OptionsApp() {
   return (
     <main className="opt-shell">
       <header className="opt-hero">
-        <div className="opt-brand-mark">BAI</div>
+        <img className="opt-brand-mark" src="/icons/icon128.png" alt="BookmarkMind AI logo" />
         <div className="opt-hero-copy">
           <p className="opt-kicker">{t('appSubtitle')}</p>
           <h1>{t('optionsTitle')}</h1>
