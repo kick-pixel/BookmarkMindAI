@@ -5,6 +5,8 @@ import { displayCategory, displayFolderPath } from '../lib/categoryI18n'
 import { resolveAIConfig } from '../lib/aiConfig'
 import { isAuthenticated } from '../lib/cloud'
 import { createTranslator, resolveLocale } from '../lib/i18n'
+import { AI_ERROR_CODES, isAIErrorCode } from '../lib/aiErrors'
+import { openQuickPanelWindow, openSettingsPage } from '../lib/navigation'
 import type { Locale } from '../lib/i18n'
 import type { Bookmark, Category, ProcessingTask, UserSettings } from '../types'
 
@@ -14,10 +16,53 @@ const CONTENT_EXTRACTION_ERRORS = [
   '无法打开页面标签页',
   '当前没有可摘要的页面正文',
   '自动打开页面分析失败',
+  '页面正文内容过少',
+  'CONTENT_NOT_READY',
+  'CONTENT_SPARSE',
+]
+
+const AUTH_REQUIRED_ERRORS = [
+  '页面可能需要登录',
+  '访问权限',
+  '登录或访问权限',
+  'CONTENT_AUTH_REQUIRED',
+]
+
+const CONFIG_REQUIRED_ERRORS = [
+  'AI 模型配置不完整',
+  'API Key',
+  'AI_CONFIG_REQUIRED',
 ]
 
 function isContentExtractionError(error: string): boolean {
   return CONTENT_EXTRACTION_ERRORS.some(pattern => error.includes(pattern))
+}
+
+function isAuthRequiredError(error: string): boolean {
+  return AUTH_REQUIRED_ERRORS.some(pattern => error.includes(pattern))
+}
+
+function isConfigRequiredError(error: string): boolean {
+  return CONFIG_REQUIRED_ERRORS.some(pattern => error.includes(pattern))
+}
+
+function getAIErrorDisplay(error: string, t: ReturnType<typeof createTranslator>['t']): { title: string; detail: string } {
+  if (isAIErrorCode(error)) {
+    switch (error) {
+      case AI_ERROR_CODES.CONFIG_REQUIRED:
+        return { title: t('aiConfigRequiredTitle'), detail: t('aiConfigRequiredDetail') }
+      case AI_ERROR_CODES.AUTH_REQUIRED:
+        return { title: t('aiFailedAuth'), detail: t('aiAuthRequiredDetail') }
+      case AI_ERROR_CODES.CONTENT_NOT_READY:
+        return { title: t('aiFailedContent'), detail: t('aiContentNotReadyDetail') }
+      case AI_ERROR_CODES.SPARSE_CONTENT:
+        return { title: t('aiFailedContent'), detail: t('aiSparseContentDetail') }
+    }
+  }
+  if (isConfigRequiredError(error)) return { title: t('aiConfigRequiredTitle'), detail: t('aiConfigRequiredDetail') }
+  if (isAuthRequiredError(error)) return { title: t('aiFailedAuth'), detail: t('aiAuthRequiredDetail') }
+  if (isContentExtractionError(error)) return { title: t('aiFailedContent'), detail: error }
+  return { title: t('aiFailed'), detail: error }
 }
 
 type FilterStatus = 'all' | 'active' | 'idle' | 'sleeping' | 'needsReview' | 'aiFailed' | 'noSummary' | 'duplicates' | 'inbox'
@@ -574,11 +619,14 @@ export default function SidePanelApp() {
           <button className="btn btn-ghost btn-sm" onClick={handleImportBookmarks}>
             {t('importBookmarks')}
           </button>
+          <button className="btn btn-ghost btn-sm" onClick={openQuickPanelWindow}>
+            {t('quickPanel')}
+          </button>
           {cloudAuthenticated && (
             <button
               className={`btn btn-ghost btn-sm sync-btn ${syncing ? 'syncing' : ''}`}
               onClick={handleSync}
-              aria-label="Sync with cloud"
+              aria-label={t('syncWithCloud')}
             >
               &#x21bb;
             </button>
@@ -587,14 +635,14 @@ export default function SidePanelApp() {
             className="sort-select"
             value={sortKey}
             onChange={e => setSortKey(e.target.value as SortKey)}
-            aria-label="Sort bookmarks"
+            aria-label={t('sortBookmarks')}
           >
             <option value="newest">{t('newest')}</option>
             <option value="oldest">{t('oldest')}</option>
             <option value="visited">{t('visited')}</option>
             <option value="alpha">{t('alpha')}</option>
           </select>
-          <button className="btn btn-ghost btn-icon" onClick={() => chrome.runtime.openOptionsPage()}>
+          <button className="btn btn-ghost btn-icon" onClick={openSettingsPage}>
             {t('settings')}
           </button>
         </div>
@@ -610,7 +658,7 @@ export default function SidePanelApp() {
             onChange={e => setSearchQuery(e.target.value)}
           />
           {searchQuery && (
-            <button className="search-clear" onClick={() => setSearchQuery('')} aria-label="Clear search">×</button>
+            <button className="search-clear" onClick={() => setSearchQuery('')} aria-label={t('clearSearch')}>×</button>
           )}
         </div>
       </div>
@@ -621,7 +669,7 @@ export default function SidePanelApp() {
             <strong>{t('aiNeedsSetup')}</strong>
             <span>{t('aiNeedsSetupDesc')}</span>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={() => chrome.runtime.openOptionsPage()}>
+          <button className="btn btn-ghost btn-sm" onClick={openSettingsPage}>
             {t('configureAI')}
           </button>
         </section>
@@ -823,11 +871,13 @@ function AIStatusNote({
     )
   }
 
+  const errorDisplay = bookmark.aiError ? getAIErrorDisplay(bookmark.aiError, t) : null
+
   if (bookmark.aiStatus === 'failed') {
     return (
       <div className="ai-status-note failed">
-        {bookmark.aiError
-          ? `${isContentExtractionError(bookmark.aiError) ? t('aiFailedContent') : t('aiFailed')}: ${bookmark.aiError}`
+        {errorDisplay
+          ? `${errorDisplay.title}: ${errorDisplay.detail}`
           : t('aiFailed')}
       </div>
     )
@@ -836,7 +886,7 @@ function AIStatusNote({
   if (bookmark.aiStatus === 'skipped') {
     return (
       <div className="ai-status-note warning">
-        {bookmark.aiError ? `${t('aiSkipped')}: ${bookmark.aiError}` : t('aiSkipped')}
+        {errorDisplay ? `${errorDisplay.title}: ${errorDisplay.detail}` : t('aiSkipped')}
       </div>
     )
   }
@@ -844,7 +894,9 @@ function AIStatusNote({
   if (bookmark.aiStatus === 'done' && bookmark.aiError) {
     return (
       <div className="ai-status-note warning">
-        {`${t('aiDoneNoSummary')}: ${bookmark.aiError}`}
+        {errorDisplay
+          ? `${t('aiDoneNoSummary')}: ${errorDisplay.detail}`
+          : `${t('aiDoneNoSummary')}: ${bookmark.aiError}`}
       </div>
     )
   }

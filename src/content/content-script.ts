@@ -200,7 +200,7 @@ function renderTooltipContent(bookmark: {
   }
 
   const saved = document.createElement('span')
-  saved.textContent = '已收藏'
+  saved.textContent = chrome.i18n.getMessage('tooltipSaved') || 'Saved'
   saved.style.cssText = 'font-weight:600;color:#a5b4fc;font-size:12px;'
   header.appendChild(saved)
 

@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { createTranslator } from '../lib/i18n'
+import { resolveAIConfig } from '../lib/aiConfig'
+import { openLibraryView, openSettingsPage } from '../lib/navigation'
 import type { Bookmark, ExtractedContent, UserSettings } from '../types'
 
 
@@ -9,7 +11,11 @@ export default function PopupApp() {
   const [isSaved, setIsSaved] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [settings, setSettings] = useState<UserSettings | null>(null)
+  const [showSetupPrompt, setShowSetupPrompt] = useState(false)
   const [loading, setLoading] = useState(true)
+  const { t } = createTranslator(settings?.language)
+  const aiConfigured = Boolean(settings && resolveAIConfig(settings))
+  const aiNeedsSetup = Boolean(settings?.aiEnabled && !aiConfigured)
 
   // ── 初始化 ──────────────────────────────────────────────────
   useEffect(() => {
@@ -64,24 +70,22 @@ export default function PopupApp() {
       if (res.success) {
         setIsSaved(true)
         setRecentBookmarks(prev => [res.data, ...prev].slice(0, 5))
+        setShowSetupPrompt(aiNeedsSetup)
       }
     } finally {
       setIsSaving(false)
     }
-  }, [tab, isSaved, isSaving])
+  }, [tab, isSaved, isSaving, aiNeedsSetup])
 
   // ── 打开侧边栏 ───────────────────────────────────────────────
   const openSidePanel = useCallback(async () => {
     if (tab?.id) {
-      await chrome.sidePanel.open({ tabId: tab.id })
+      await openLibraryView(tab.id)
       window.close()
     }
   }, [tab])
 
   // ── 工具函数 ─────────────────────────────────────────────────
-  const { t } = createTranslator(settings?.language)
-  const aiConfigured = Boolean(settings?.aiEnabled)
-
   const statusColor: Record<string, string> = {
     active: 'var(--success)',
     idle: 'var(--warning)',
@@ -111,7 +115,7 @@ export default function PopupApp() {
           {isSaved && <span className="saved-badge">✓ {t('saved')}</span>}
           <button
             className="btn btn-ghost btn-icon"
-            onClick={() => chrome.runtime.openOptionsPage()}
+            onClick={openSettingsPage}
             data-tip={t('openSettings')}
           >{t('settings')}</button>
         </div>
@@ -144,14 +148,14 @@ export default function PopupApp() {
         </div>
       )}
 
-      {settings?.aiEnabled && !aiConfigured && (
+      {aiNeedsSetup && (
         <div className="setup-card">
           <div className="setup-card-icon">AI</div>
           <div className="setup-card-copy">
-            <strong>{t('setupAI')}</strong>
-            <span>{t('setupAIDesc')}</span>
+            <strong>{showSetupPrompt || isSaved ? t('aiConfigRequiredTitle') : t('setupAI')}</strong>
+            <span>{showSetupPrompt || isSaved ? t('setupAIOnSaveDesc') : t('setupAIDesc')}</span>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => chrome.runtime.openOptionsPage()}>
+          <button className="btn btn-primary btn-sm" onClick={openSettingsPage}>
             {t('setupNow')}
           </button>
         </div>
@@ -207,7 +211,7 @@ export default function PopupApp() {
         <button className="btn btn-ghost" onClick={openSidePanel}>{t('manageBookmarks')}</button>
         <button
           className="btn btn-ghost"
-          onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html') })}
+          onClick={openSettingsPage}
         >{t('settings')}</button>
       </footer>
     </div>

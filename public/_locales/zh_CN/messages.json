@@ -25,5 +25,8 @@
   },
   "notificationSavedMessage": {
     "message": "AI 正在后台整理这个书签。"
+  },
+  "tooltipSaved": {
+    "message": "已收藏"
   }
 }

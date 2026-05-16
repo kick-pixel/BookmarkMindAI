@@ -28,6 +28,7 @@ import { generateSummary, extractKeywords } from '../lib/ai'
 import { smartClassify } from '../lib/bookmarkClassifier'
 import { recordUserCorrection } from '../lib/bookmarkClassifier/userLearning'
 import { BYOK_CONFIG_REQUIRED_MESSAGE, resolveAIConfig } from '../lib/aiConfig'
+import { AI_ERROR_CODES, getUnreadableContentErrorCode } from '../lib/aiErrors'
 import type { Bookmark, Message, MessageResponse, ExtractedContent, UserSettings, ProcessingTask } from '../types'
 
 // ── AI 请求去重节流 ────────────────────────────────────────────
@@ -38,6 +39,9 @@ const CONTEXT_MENU_SAVE_PAGE = 'bai-save-page'
 const CONTEXT_MENU_OPEN_PANEL = 'bai-open-panel'
 const AUTO_ANALYZE_DELAY_MS = 3000
 const AUTO_ANALYZE_TAB_TIMEOUT_MS = 25000
+const AUTO_ANALYZE_RETRY_DELAY_MS = 2200
+const AUTO_ANALYZE_ACTIVE_RETRY_DELAY_MS = 4500
+const AUTO_ANALYZE_MAX_EXTRACT_ATTEMPTS = 4
 
 function dedupAI<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const existing = aiRequestCache.get(key)
@@ -335,7 +339,12 @@ async function handleMessage(msg: Message): Promise<MessageResponse> {
         )
         .map(bookmark => bookmark.url)
       if (!failedUrls.length) return { success: true, data: { total: 0 } }
-      enqueueAutoAnalysis(() => analyzeBookmarksByOpeningTabs(failedUrls, 'retry'))
+      enqueueAutoAnalysis(() =>
+        analyzeBookmarksByOpeningTabs(failedUrls, 'retry', {
+          concurrency: 1,
+          activateOnReadFailure: true,
+        }),
+      )
       return { success: true, data: { total: failedUrls.length } }
     }
 
@@ -627,7 +636,12 @@ async function extractPageContentInPage(): Promise<ExtractedContent> {
 async function analyzeBookmarksByOpeningTabs(
   importedUrls: string[],
   taskType: ProcessingTask['type'],
-  options: { active?: boolean; closeTabs?: boolean } = {},
+  options: {
+    active?: boolean
+    closeTabs?: boolean
+    concurrency?: number
+    activateOnReadFailure?: boolean
+  } = {},
 ): Promise<void> {
   if (!importedUrls.length) return
 
@@ -641,7 +655,7 @@ async function analyzeBookmarksByOpeningTabs(
   let failedCount = 0
   const taskId = `${taskType}_${Date.now()}`
 
-  const CONCURRENT_TABS = 3
+  const concurrentTabs = Math.max(1, options.concurrency ?? 3)
 
   await updateProcessingTask({
     id: taskId,
@@ -659,11 +673,12 @@ async function analyzeBookmarksByOpeningTabs(
       const analyzed = await analyzeBookmarkInTemporaryTab(bookmark, {
         active: options.active ?? false,
         closeTab: options.closeTabs ?? true,
+        activateOnReadFailure: options.activateOnReadFailure ?? false,
       })
       if (analyzed.aiStatus === 'failed' || analyzed.aiError) failedCount++
     } catch (err) {
       bookmark.aiStatus = 'failed'
-      bookmark.aiError = err instanceof Error ? err.message : '自动打开页面分析失败'
+      bookmark.aiError = err instanceof Error ? err.message : AI_ERROR_CODES.CONTENT_NOT_READY
       bookmark.updatedAt = Date.now()
       failedCount++
       await saveBookmark(bookmark)
@@ -673,10 +688,10 @@ async function analyzeBookmarksByOpeningTabs(
     await broadcastProcessingProgress(taskId, taskType, processedCount, total, failedCount)
   }
 
-  // Process in concurrent batches of CONCURRENT_TABS
+  // Process in controlled batches. Retry tasks favor reliability over speed.
   const chunks: Bookmark[][] = []
-  for (let i = 0; i < imported.length; i += CONCURRENT_TABS) {
-    chunks.push(imported.slice(i, i + CONCURRENT_TABS))
+  for (let i = 0; i < imported.length; i += concurrentTabs) {
+    chunks.push(imported.slice(i, i + concurrentTabs))
   }
 
   for (const chunk of chunks) {
@@ -697,7 +712,7 @@ async function analyzeBookmarksByOpeningTabs(
 
 async function analyzeBookmarkInTemporaryTab(
   bookmark: Bookmark,
-  options: { active: boolean; closeTab: boolean },
+  options: { active: boolean; closeTab: boolean; activateOnReadFailure: boolean },
 ): Promise<Bookmark> {
   bookmark.aiStatus = 'pending'
   bookmark.aiError = undefined
@@ -705,14 +720,17 @@ async function analyzeBookmarkInTemporaryTab(
   chrome.runtime.sendMessage({ type: 'BOOKMARK_UPDATED', payload: bookmark }).catch(() => {})
 
   const tab = await chrome.tabs.create({ url: bookmark.url, active: options.active })
-  if (!tab.id) throw new Error('无法打开页面标签页')
+  if (!tab.id) throw new Error(AI_ERROR_CODES.CONTENT_NOT_READY)
 
   try {
     const loadedTab = await waitForTabComplete(tab.id)
-    await sleep(AUTO_ANALYZE_DELAY_MS)
-    const content = await extractContentFromTab(loadedTab)
+    const content = await extractReadableContentFromTemporaryTab(
+      tab.id,
+      loadedTab,
+      options.activateOnReadFailure,
+    )
     if (!hasReadableMainContent(content)) {
-      throw new Error('页面正文未加载完成或无法读取')
+      throw new Error(getUnreadableContentErrorCode(content))
     }
     await processWithAI(bookmark, content)
     return bookmark
@@ -723,11 +741,45 @@ async function analyzeBookmarkInTemporaryTab(
   }
 }
 
+async function extractReadableContentFromTemporaryTab(
+  tabId: number,
+  initialTab: chrome.tabs.Tab,
+  activateOnReadFailure: boolean,
+): Promise<ExtractedContent> {
+  let lastContent: ExtractedContent | null = null
+  let activatedForRetry = false
+
+  for (let attempt = 1; attempt <= AUTO_ANALYZE_MAX_EXTRACT_ATTEMPTS; attempt++) {
+    if (attempt === 1) {
+      await sleep(AUTO_ANALYZE_DELAY_MS)
+    } else if (activateOnReadFailure && !activatedForRetry && attempt >= 3) {
+      await chrome.tabs.update(tabId, { active: true }).catch(() => {})
+      activatedForRetry = true
+      await sleep(AUTO_ANALYZE_ACTIVE_RETRY_DELAY_MS)
+    } else {
+      await sleep(AUTO_ANALYZE_RETRY_DELAY_MS)
+    }
+
+    const currentTab = await chrome.tabs.get(tabId).catch(() => initialTab)
+    const content = await extractContentFromTab(currentTab)
+    lastContent = content
+    if (hasReadableMainContent(content)) return content
+  }
+
+  return lastContent ?? {
+    title: initialTab.title ?? initialTab.url ?? '',
+    url: initialTab.url ?? '',
+    description: '',
+    mainContent: '',
+    favicon: initialTab.favIconUrl,
+  }
+}
+
 function waitForTabComplete(tabId: number): Promise<chrome.tabs.Tab> {
   return new Promise((resolve, reject) => {
     const timeoutId = globalThis.setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener)
-      reject(new Error('页面加载超时'))
+      reject(new Error(AI_ERROR_CODES.CONTENT_NOT_READY))
     }, AUTO_ANALYZE_TAB_TIMEOUT_MS)
 
     const listener = (updatedTabId: number, changeInfo: { status?: string }, tab: chrome.tabs.Tab) => {
@@ -879,7 +931,7 @@ async function processWithAI(bookmark: Bookmark, content: ExtractedContent) {
           bookmark.summaryGeneratedAt = Date.now()
         }
       } else {
-        bookmark.aiError = '当前没有可摘要的页面正文。纯前端模式只处理已打开并完成渲染的页面。'
+        bookmark.aiError = getUnreadableContentErrorCode(content)
       }
     }
 

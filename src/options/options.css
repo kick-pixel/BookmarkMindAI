@@ -150,6 +150,7 @@ body {
 .opt-hero-copy {
   position: relative;
   z-index: 1;
+  padding-right: 58px;
 }
 
 .opt-kicker {
@@ -174,6 +175,26 @@ body {
   margin-top: 12px;
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+.opt-version {
+  width: fit-content;
+  margin-top: 12px;
+  padding: 4px 9px;
+  border: 1px solid rgba(124, 244, 255, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 10, 24, 0.42);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.opt-hero-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
 }
 
 .opt-section {

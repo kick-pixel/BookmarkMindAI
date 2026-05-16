@@ -25,5 +25,8 @@
   },
   "notificationSavedMessage": {
     "message": "AI is organizing this bookmark in the background."
+  },
+  "tooltipSaved": {
+    "message": "Saved"
   }
 }

@@ -1,8 +1,8 @@
 import type { AIConfig, UserSettings } from '../types'
+import { AI_ERROR_CODES } from './aiErrors'
 import { getProviderPreset } from './aiProviders'
 
-export const BYOK_CONFIG_REQUIRED_MESSAGE =
-  'AI 模型配置不完整，请先到设置页面配置 API Key、API Base URL 和模型名称。'
+export const BYOK_CONFIG_REQUIRED_MESSAGE = AI_ERROR_CODES.CONFIG_REQUIRED
 
 /** 过滤空字符串，确保返回有效的配置值 */
 function nonEmpty(v: string | undefined): string | undefined {

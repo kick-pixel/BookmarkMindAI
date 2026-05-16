@@ -4,6 +4,7 @@ import type { CloudUser } from '../lib/cloud'
 import { AI_PROVIDER_PRESETS, getProviderPreset } from '../lib/aiProviders'
 import { parseImportedBookmarks } from '../lib/bookmarkImport'
 import { createTranslator } from '../lib/i18n'
+import { openLibraryView, openQuickPanelWindow } from '../lib/navigation'
 import type { AIProvider, AppLanguage, Bookmark, UserSettings } from '../types'
 
 
@@ -18,6 +19,7 @@ export default function OptionsApp() {
   const [cloudAuthenticated, setCloudAuthenticated] = useState(false)
 
   const { t } = createTranslator(settings?.language)
+  const appVersion = chrome.runtime.getManifest().version
   useEffect(() => {
     async function load() {
       const settingsRes = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
@@ -144,6 +146,15 @@ export default function OptionsApp() {
           <p className="opt-kicker">{t('appSubtitle')}</p>
           <h1>{t('optionsTitle')}</h1>
           <p>{t('optionsSubtitle')}</p>
+          <div className="opt-version">{t('versionLabel', { version: appVersion })}</div>
+          <div className="opt-hero-actions">
+            <button className="btn btn-primary btn-sm" type="button" onClick={() => openLibraryView()}>
+              {t('openLibrary')}
+            </button>
+            <button className="btn btn-ghost btn-sm" type="button" onClick={openQuickPanelWindow}>
+              {t('quickPanel')}
+            </button>
+          </div>
         </div>
         <div ref={languageSwitcherRef} className={`language-switcher ${languageMenuOpen ? 'open' : ''}`}>
           <button
@@ -177,7 +188,7 @@ export default function OptionsApp() {
       </header>
 
       <section className="opt-section">
-        <div className="opt-section-title">Cloud Account</div>
+        <div className="opt-section-title">{t('cloudAccount')}</div>
         {cloudAuthenticated && cloudUser ? (
           <div className="cloud-account-card">
             <div className="cloud-user-info">
@@ -187,7 +198,7 @@ export default function OptionsApp() {
               </span>
             </div>
             <p className="cloud-status">
-              Sync: {cloudUser.subscriptionStatus === 'active' ? 'Active' : 'Local mode only'}
+              {cloudUser.subscriptionStatus === 'active' ? t('cloudSyncActive') : t('cloudSyncLocalOnly')}
             </p>
             <div className="cloud-actions">
               <button className="btn btn-ghost btn-sm" onClick={async () => {
@@ -195,18 +206,18 @@ export default function OptionsApp() {
                 setCloudAuthenticated(false)
                 setCloudUser(null)
               }}>
-                Sign Out
+                {t('signOut')}
               </button>
               {cloudUser.tier === 'free' && (
                 <a className="btn btn-primary btn-sm" href="https://bookmarkmind.ai/pricing" target="_blank" rel="noopener noreferrer">
-                  Upgrade to Pro
+                  {t('upgradeToPro')}
                 </a>
               )}
             </div>
           </div>
         ) : (
           <div className="cloud-account-card">
-            <p className="cloud-status">Sign in to enable cloud sync and cross-device knowledge base.</p>
+            <p className="cloud-status">{t('cloudSignInDesc')}</p>
             <button className="btn btn-primary" onClick={async () => {
               const success = await loginWithGoogle()
               if (success) {
@@ -215,7 +226,7 @@ export default function OptionsApp() {
                 setCloudUser(user)
               }
             }}>
-              Sign in with Google
+              {t('signInWithGoogle')}
             </button>
           </div>
         )}
